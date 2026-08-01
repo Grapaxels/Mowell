@@ -7,12 +7,15 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import java.util.UUID
 
 class MowellDao(private val db: () -> SQLiteDatabase) {
     private val conversations = MutableStateFlow(loadConversations())
+    private val chatLists = MutableStateFlow(loadChatLists())
     private val messageFlows = ConcurrentHashMap<String, MutableStateFlow<List<MessageEntity>>>()
 
     fun observeConversations(): Flow<List<ConversationEntity>> = conversations
+    fun observeChatLists(): Flow<List<ChatListEntity>> = chatLists
 
     fun observeMessages(conversationId: String): Flow<List<MessageEntity>> =
         messageFlows.getOrPut(conversationId) { MutableStateFlow(loadMessages(conversationId)) }
@@ -138,6 +141,26 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         conversations.value = loadConversations()
     }
 
+    suspend fun createChatList(name: String, conversationIds: Set<String>) = withContext(Dispatchers.IO) {
+        val cleanName = name.trim().take(30)
+        if (cleanName.isBlank() || conversationIds.isEmpty()) return@withContext
+        val database = db()
+        val listId = UUID.randomUUID().toString()
+        database.beginTransaction()
+        try {
+            database.insertOrThrow("chat_lists", null, ContentValues().apply {
+                put("id", listId); put("name", cleanName); put("createdAt", System.currentTimeMillis())
+            })
+            conversationIds.forEach { conversationId ->
+                database.insertWithOnConflict("chat_list_members", null, ContentValues().apply {
+                    put("listId", listId); put("conversationId", conversationId)
+                }, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
+        chatLists.value = loadChatLists()
+    }
+
     suspend fun clearAccountData() = withContext(Dispatchers.IO) {
         val database = db()
         database.beginTransaction()
@@ -145,10 +168,13 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             database.delete("messages", null, null)
             database.delete("conversations", null, null)
             database.delete("cached_users", null, null)
+            database.delete("chat_list_members", null, null)
+            database.delete("chat_lists", null, null)
             database.setTransactionSuccessful()
         } finally { database.endTransaction() }
         messageFlows.values.forEach { it.value = emptyList() }
         conversations.value = emptyList()
+        chatLists.value = emptyList()
     }
 
     private fun refreshMessages(conversationId: String) {
@@ -194,6 +220,22 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
                 cursor.getString(cursor.getColumnIndexOrThrow("attachmentMime")),
                 cursor.getString(cursor.getColumnIndexOrThrow("attachmentName"))
             ))
+        }
+    }
+
+    private fun loadChatLists(): List<ChatListEntity> = db().query(
+        "chat_lists", arrayOf("id", "name"), null, null, null, null, "createdAt ASC"
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                val id = cursor.getString(0)
+                val members = db().query(
+                    "chat_list_members", arrayOf("conversationId"), "listId = ?", arrayOf(id), null, null, null
+                ).use { memberCursor ->
+                    buildSet { while (memberCursor.moveToNext()) add(memberCursor.getString(0)) }
+                }
+                add(ChatListEntity(id, cursor.getString(1), members))
+            }
         }
     }
 }

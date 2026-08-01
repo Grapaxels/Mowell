@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -79,9 +80,11 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -305,6 +308,8 @@ private fun MainExperience(vm: MowellViewModel) {
     val context = LocalContext.current
     val update by vm.update.collectAsStateWithLifecycle()
     val showUpdate by vm.showUpdatePopup.collectAsStateWithLifecycle()
+    val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
+    val updateDownloading by vm.updateDownloading.collectAsStateWithLifecycle()
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf<ConversationEntity?>(null) }
@@ -320,9 +325,9 @@ private fun MainExperience(vm: MowellViewModel) {
         AlertDialog(
             onDismissRequest = vm::dismissUpdate,
             title = { Text("Mowell ${update!!.versionName} is available", fontWeight = FontWeight.Black) },
-            text = { Text(if (BuildConfig.SELF_UPDATE) "Download and update from inside Mowell. Android will ask once before installing the signed update." else "Install this verified update through Google Play.") },
-            confirmButton = { Button(onClick = { (context as? Activity)?.let(vm::installUpdate) }) { Text("Update now") } },
-            dismissButton = { OutlinedButton(onClick = vm::dismissUpdate) { Text("Later") } }
+            text = { Column { Text(if (BuildConfig.SELF_UPDATE) "Download and update from inside Mowell. Android will ask once before installing the signed update." else "Install this verified update through Google Play."); if (updateDownloading || updateStatus.startsWith("Could not")) { Spacer(Modifier.height(9.dp)); Text(updateStatus, color = if (updateStatus.startsWith("Could not")) Color(0xFFB3261E) else Violet, fontSize = 12.sp) } } },
+            confirmButton = { Button(enabled = !updateDownloading, onClick = { (context as? Activity)?.let(vm::installUpdate) }) { if (updateDownloading) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp) else Text("Update now") } },
+            dismissButton = { OutlinedButton(enabled = !updateDownloading, onClick = vm::dismissUpdate) { Text("Later") } }
         )
     }
     when {
@@ -372,14 +377,92 @@ private fun RowScope.Nav(target: Page, selected: Page, label: String, icon: Imag
 @Composable
 private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) -> Unit) {
     val conversations by vm.conversations.collectAsStateWithLifecycle()
+    val chatLists by vm.chatLists.collectAsStateWithLifecycle()
     val users by vm.userResults.collectAsStateWithLifecycle()
     var peopleQuery by remember { mutableStateOf("") }
+    var selectedFilter by remember { mutableStateOf("all") }
+    var creatingList by remember { mutableStateOf(false) }
+    var listName by remember { mutableStateOf("") }
+    var selectedPeople by remember { mutableStateOf(setOf<String>()) }
+    val people = conversations.filter { !it.isGroup && it.id != "general" }
+    val visibleConversations = when (selectedFilter) {
+        "unread" -> conversations.filter { it.unreadCount > 0 }
+        "groups" -> conversations.filter { it.isGroup }
+        "all" -> conversations
+        else -> chatLists.find { it.id == selectedFilter }?.conversationIds
+            ?.let { memberIds -> conversations.filter { it.id in memberIds } }.orEmpty()
+    }
+
+    if (creatingList) {
+        AlertDialog(
+            onDismissRequest = { creatingList = false },
+            title = { Text("Create a people list", fontWeight = FontWeight.Black) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = listName,
+                        onValueChange = { listName = it.take(30) },
+                        label = { Text("List name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text("Choose people", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                        items(people, key = { "list-person-${it.id}" }) { conversation ->
+                            val checked = conversation.id in selectedPeople
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable {
+                                    selectedPeople = if (checked) selectedPeople - conversation.id else selectedPeople + conversation.id
+                                }.padding(vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(checked = checked, onCheckedChange = {
+                                    selectedPeople = if (checked) selectedPeople - conversation.id else selectedPeople + conversation.id
+                                })
+                                Avatar(conversation.title, 36.dp, Ink, conversation.avatarUrl)
+                                Spacer(Modifier.width(9.dp))
+                                Column { Text(conversation.title, fontWeight = FontWeight.Bold); conversation.username?.let { Text("@$it", color = Violet, fontSize = 11.sp) } }
+                            }
+                        }
+                        if (people.isEmpty()) item { Text("Add people to Mowell before creating a list.", color = Muted, modifier = Modifier.padding(vertical = 16.dp)) }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = listName.trim().isNotEmpty() && selectedPeople.isNotEmpty(),
+                    onClick = {
+                        vm.createChatList(listName, selectedPeople)
+                        listName = ""; selectedPeople = emptySet(); creatingList = false
+                    }
+                ) { Text("Create") }
+            },
+            dismissButton = { OutlinedButton(onClick = { creatingList = false }) { Text("Cancel") } }
+        )
+    }
+
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
-            Text("Conversations", fontSize = 30.sp, fontWeight = FontWeight.Black)
-            Text("Central identity. Private phone storage. Nearby resilience.", color = Muted, fontSize = 13.sp)
-            Spacer(Modifier.height(8.dp))
             ClayField(peopleQuery, { value -> peopleQuery = value.lowercase(); vm.searchUsers(value) }, "Search people by username", leading = Icons.Rounded.Search)
+        }
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 6.dp)) {
+                item { FilterChip(selected = selectedFilter == "all", onClick = { selectedFilter = "all" }, label = { Text("All") }) }
+                item { FilterChip(selected = selectedFilter == "unread", onClick = { selectedFilter = "unread" }, label = { Text("Unread") }) }
+                item { FilterChip(selected = selectedFilter == "groups", onClick = { selectedFilter = "groups" }, label = { Text("Groups") }) }
+                items(chatLists, key = { "filter-${it.id}" }) { list ->
+                    FilterChip(selected = selectedFilter == list.id, onClick = { selectedFilter = list.id }, label = { Text(list.name, maxLines = 1) })
+                }
+                item {
+                    FilterChip(
+                        selected = false,
+                        onClick = { listName = ""; selectedPeople = emptySet(); creatingList = true },
+                        label = { Text("New list") },
+                        leadingIcon = { Icon(Icons.Rounded.Add, "Create list", Modifier.size(18.dp)) }
+                    )
+                }
+            }
         }
         if (peopleQuery.length >= 2) {
             items(users, key = { "person-${it.id}" }) { user ->
@@ -396,7 +479,8 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
             }
             if (users.isEmpty()) item { Text("No matching people found.", color = Muted, modifier = Modifier.padding(10.dp)) }
         } else {
-            items(conversations, key = { it.id }) { conversation -> ConversationClay(conversation) { open(conversation.id) } }
+            items(visibleConversations, key = { it.id }) { conversation -> ConversationClay(conversation) { open(conversation.id) } }
+            if (visibleConversations.isEmpty()) item { Text("No chats in this list yet.", color = Muted, modifier = Modifier.padding(10.dp)) }
         }
     }
 }

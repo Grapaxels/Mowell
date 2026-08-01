@@ -7,10 +7,11 @@ MONGODB_URI=mongodb+srv://DATABASE_USER:ROTATED_PASSWORD@YOUR_CLUSTER.mongodb.ne
 JWT_SECRET=GENERATE_A_RANDOM_SECRET_OF_AT_LEAST_32_CHARACTERS
 GOOGLE_CLIENT_ID=YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com
 ALLOWED_ORIGIN=*
-ANDROID_VERSION_CODE=13
-ANDROID_VERSION_NAME=1.4.1
-ANDROID_APK_URL=https://github.com/Grapaxels/Mowell/releases/latest/download/Mowell.apk
-ANDROID_APK_SHA256=0DD80939C1E619596E0D3BDCD806643551AEE76114731A132F97BF41891830CC
+PUBLIC_BASE_URL=https://mowell-api.grapaxels.in
+ANDROID_VERSION_CODE=14
+ANDROID_VERSION_NAME=1.4.2
+ANDROID_APK_URL=https://mowell-api.grapaxels.in/v1/app/apk
+ANDROID_APK_SHA256=1438CA554954E21C2D5A88B1890FFFBAD3BDA8D005B7E167C56A56FD04297FF7
 ANDROID_UPDATE_REQUIRED=false
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
@@ -22,6 +23,8 @@ BLOCKED_EMAIL_DOMAINS=optional-extra-domain.example,another-temp-domain.example
 ```
 
 `MONGO_URI` is also accepted as an alternative name for `MONGODB_URI`, but configure only one. `GOOGLE_CLIENT_ID` is optional until Google OAuth is set up. `SMTP_PASS` must be a 16-character Google App Password created after enabling 2-Step Verification, not your normal Gmail password. Spaces in a pasted App Password are accepted. `EMAIL_USER`/`EMAIL_APP_PASSWORD` and `MAIL_USER`/`MAIL_PASS` are also accepted aliases. Do not add `PORT` on Vercel; Vercel manages it. Redeploy after changing variables.
+
+The deploy includes `server/assets/Mowell.apk` and serves it from `/v1/app/apk`, so the in-app updater no longer depends on a separately created GitHub Release. For every future update, replace that APK, increase `ANDROID_VERSION_CODE`, update its SHA-256, push, and redeploy the server.
 
 After deployment, open `https://mowell-api.grapaxels.in/health/email`. It should return `"configured":true`. The endpoint never returns the email address or password.
 

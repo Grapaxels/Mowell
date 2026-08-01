@@ -36,3 +36,9 @@ data class CachedUser(
     val displayName: String,
     val avatarUrl: String?
 )
+
+data class ChatListEntity(
+    val id: String,
+    val name: String,
+    val conversationIds: Set<String>
+)

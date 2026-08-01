@@ -9,6 +9,8 @@ import mongoose from "mongoose";
 import nodemailer from "nodemailer";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { CallRoom, CallSignal, Contact, Conversation, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
@@ -152,10 +154,21 @@ app.get("/health/email", (_req, res) => {
     fromConfigured: Boolean(process.env.SMTP_FROM)
   });
 });
-app.get("/v1/app/version", (_req, res) => res.json({
+const packagedApkPath = fileURLToPath(new URL("../assets/Mowell.apk", import.meta.url));
+app.get("/v1/app/apk", (_req, res) => {
+  if (!existsSync(packagedApkPath)) return res.status(503).json({ error: "The update APK has not been published yet" });
+  res.set({
+    "Content-Type": "application/vnd.android.package-archive",
+    "Content-Disposition": "attachment; filename=\"Mowell.apk\"",
+    "Cache-Control": "public, max-age=300"
+  });
+  return res.sendFile(packagedApkPath);
+});
+
+app.get("/v1/app/version", (req, res) => res.json({
   versionCode: Number(process.env.ANDROID_VERSION_CODE || 1),
   versionName: process.env.ANDROID_VERSION_NAME || "0.1.0",
-  apkUrl: process.env.ANDROID_APK_URL || null,
+  apkUrl: process.env.ANDROID_APK_URL || `${process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`}/v1/app/apk`,
   sha256: process.env.ANDROID_APK_SHA256 || null,
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));

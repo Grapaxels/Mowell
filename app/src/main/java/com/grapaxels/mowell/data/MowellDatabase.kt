@@ -9,7 +9,7 @@ class MowellDatabase private constructor(context: Context) {
     private val mowellDao by lazy { MowellDao { helper.writableDatabase } }
     fun dao(): MowellDao = mowellDao
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 6) {
+    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 7) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""
                 CREATE TABLE conversations (
@@ -45,6 +45,7 @@ class MowellDatabase private constructor(context: Context) {
             """.trimIndent())
             db.execSQL("CREATE INDEX index_messages_conversation ON messages(conversationId, sentAt)")
             createUsers(db)
+            createChatLists(db)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -66,6 +67,7 @@ class MowellDatabase private constructor(context: Context) {
                 db.execSQL("ALTER TABLE conversations ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE conversations ADD COLUMN blockedByMe INTEGER NOT NULL DEFAULT 0")
             }
+            if (oldVersion < 7) createChatLists(db)
         }
 
         private fun createUsers(db: SQLiteDatabase) = db.execSQL("""
@@ -77,6 +79,24 @@ class MowellDatabase private constructor(context: Context) {
                 cachedAt INTEGER NOT NULL
             )
         """.trimIndent())
+
+        private fun createChatLists(db: SQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS chat_lists (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL
+                )
+            """.trimIndent())
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS chat_list_members (
+                    listId TEXT NOT NULL,
+                    conversationId TEXT NOT NULL,
+                    PRIMARY KEY (listId, conversationId)
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_chat_list_members_list ON chat_list_members(listId)")
+        }
     }
 
     companion object {

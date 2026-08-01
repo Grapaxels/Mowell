@@ -126,6 +126,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private var voiceRecorder: MediaRecorder? = null
     private var voiceRecordingFile: File? = null
     val conversations = dao.observeConversations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val chatLists = dao.observeChatLists().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var selectedPeer: String? = null
 
     private val _session = MutableStateFlow(auth.savedSession)
@@ -146,6 +147,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val showUpdatePopup: StateFlow<Boolean> = _showUpdatePopup.asStateFlow()
     private val _updateStatus = MutableStateFlow("Ready to check")
     val updateStatus: StateFlow<String> = _updateStatus.asStateFlow()
+    private val _updateDownloading = MutableStateFlow(false)
+    val updateDownloading: StateFlow<Boolean> = _updateDownloading.asStateFlow()
     private val _typingUsers = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val typingUsers: StateFlow<Map<String, List<String>>> = _typingUsers.asStateFlow()
     private val _voiceRecording = MutableStateFlow(false)
@@ -185,6 +188,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun messages(conversationId: String) = dao.observeMessages(conversationId)
+
+    fun createChatList(name: String, conversationIds: Set<String>) {
+        viewModelScope.launch { dao.createChatList(name, conversationIds) }
+    }
 
     fun markConversationRead(conversationId: String) {
         viewModelScope.launch {
@@ -662,7 +669,27 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     fun dismissUpdate() { _showUpdatePopup.value = false }
     fun checkForUpdates() = checkForUpdates(showPopup = false)
     fun checkForUpdates(showPopup: Boolean) { viewModelScope.launch { refreshUpdate(showPopup) } }
-    fun installUpdate(activity: Activity) { _update.value?.let { updater.downloadAndInstall(activity, it) } }
+    fun installUpdate(activity: Activity) {
+        val available = _update.value ?: return
+        if (!BuildConfig.SELF_UPDATE) {
+            updater.install(activity, File(""))
+            return
+        }
+        if (_updateDownloading.value) return
+        viewModelScope.launch {
+            _updateDownloading.value = true
+            _updateStatus.value = "Starting secure download…"
+            updater.download(available) { progress ->
+                _updateStatus.value = if (progress >= 0) "Downloading update… $progress%" else "Downloading update…"
+            }.onSuccess { file ->
+                _updateStatus.value = "Download verified. Opening Android installer…"
+                updater.install(activity, file)
+            }.onFailure { error ->
+                _updateStatus.value = "Could not download update: ${error.message ?: "unknown error"}"
+            }
+            _updateDownloading.value = false
+        }
+    }
     fun resumeUpdateInstall(activity: Activity) = updater.resumePendingInstall(activity)
 
     private suspend fun refreshUpdate(showPopup: Boolean) {

@@ -1,11 +1,8 @@
 package com.grapaxels.mowell.network
 
 import android.app.Activity
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -19,6 +16,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
 
 data class UpdateInfo(val versionCode: Int, val versionName: String, val apkUrl: String, val required: Boolean, val sha256: String? = null)
 
@@ -40,7 +39,65 @@ class AppUpdater(private val context: Context, private val auth: AuthRepository)
         } catch (_: Exception) { null }
     }
 
-    fun downloadAndInstall(activity: Activity, update: UpdateInfo) {
+    suspend fun download(update: UpdateInfo, onProgress: (Int) -> Unit): Result<File> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!BuildConfig.SELF_UPDATE) error("This build receives updates through Google Play")
+            val downloadDirectory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: error("Phone storage is unavailable")
+            downloadDirectory.mkdirs()
+            val updateFile = File(downloadDirectory, "Mowell-update.apk")
+            val temporaryFile = File(downloadDirectory, "Mowell-update.part")
+            state.edit().remove("pending_install").apply()
+            temporaryFile.delete()
+
+            val request = Request.Builder()
+                .url(update.apkUrl)
+                .header("User-Agent", "Mowell-Android/${BuildConfig.VERSION_NAME}")
+                .header("Accept", "application/vnd.android.package-archive, application/octet-stream")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) error("Download server returned HTTP ${response.code}")
+                val body = response.body ?: error("Download server returned an empty file")
+                val total = body.contentLength()
+                val digest = MessageDigest.getInstance("SHA-256")
+                body.byteStream().use { input ->
+                    FileOutputStream(temporaryFile).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var downloaded = 0L
+                        var lastProgress = -1
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                            digest.update(buffer, 0, count)
+                            downloaded += count
+                            val progress = if (total > 0) ((downloaded * 100L) / total).toInt().coerceIn(0, 100) else -1
+                            if (progress != lastProgress) { lastProgress = progress; onProgress(progress) }
+                        }
+                        output.fd.sync()
+                    }
+                }
+                if (temporaryFile.length() < 100_000L) error("The download was not an APK file")
+                val zipHeader = temporaryFile.inputStream().use { input -> byteArrayOf(input.read().toByte(), input.read().toByte()) }
+                if (zipHeader[0] != 'P'.code.toByte() || zipHeader[1] != 'K'.code.toByte()) error("The server returned a web page instead of the APK")
+                val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+                if (update.sha256 != null && !actualHash.equals(update.sha256, ignoreCase = true)) {
+                    error("Security check failed: the APK checksum does not match")
+                }
+            }
+
+            updateFile.delete()
+            if (!temporaryFile.renameTo(updateFile)) {
+                temporaryFile.copyTo(updateFile, overwrite = true)
+                temporaryFile.delete()
+            }
+            state.edit().putBoolean("pending_install", true).apply()
+            onProgress(100)
+            updateFile
+        }.onFailure { File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Mowell-update.part").delete() }
+    }
+
+    fun install(activity: Activity, updateFile: File) {
         if (!BuildConfig.SELF_UPDATE) {
             val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=${activity.packageName}"))
             runCatching { activity.startActivity(market) }.getOrElse {
@@ -48,36 +105,7 @@ class AppUpdater(private val context: Context, private val auth: AuthRepository)
             }
             return
         }
-        val updateFile = File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Mowell-update.apk")
-        if (state.getBoolean("pending_install", false) && updateFile.exists()) {
-            openInstallerOrPermission(activity, updateFile)
-            return
-        }
-        state.edit().remove("pending_install").apply()
-        updateFile.delete()
-        val manager = activity.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val request = DownloadManager.Request(Uri.parse(update.apkUrl))
-            .setTitle("Mowell ${update.versionName}")
-            .setDescription("Downloading secure app update")
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(activity, Environment.DIRECTORY_DOWNLOADS, "Mowell-update.apk")
-        val id = manager.enqueue(request)
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(receiverContext: Context, intent: Intent) {
-                if (intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) != id) return
-                runCatching { activity.unregisterReceiver(this) }
-                val file = File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Mowell-update.apk")
-                if (!file.exists()) return
-                if (update.sha256 != null) {
-                    val actual = java.security.MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
-                    if (!actual.equals(update.sha256, ignoreCase = true)) { file.delete(); return }
-                }
-                state.edit().putBoolean("pending_install", true).apply()
-                openInstallerOrPermission(activity, file)
-            }
-        }
-        if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_NOT_EXPORTED)
-        else @Suppress("DEPRECATION") activity.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
+        openInstallerOrPermission(activity, updateFile)
     }
 
     fun resumePendingInstall(activity: Activity) {
