@@ -10,7 +10,7 @@ ALLOWED_ORIGIN=*
 ANDROID_VERSION_CODE=7
 ANDROID_VERSION_NAME=1.1.0
 ANDROID_APK_URL=https://github.com/Grapaxels/Mowell/releases/latest/download/Mowell.apk
-ANDROID_APK_SHA256=D22CBB5393B27BC46557474391B7C59682A805C0582F66FDFA8AD57C51A7A8EB
+ANDROID_APK_SHA256=8DD1A423247A1062AE0738B9128EDEB64A6B76CBEB9A89C3261BE45BA371E9BB
 ANDROID_UPDATE_REQUIRED=false
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
@@ -21,7 +21,9 @@ SMTP_FROM=Mowell by Grapaxels <your-google-mail@gmail.com>
 BLOCKED_EMAIL_DOMAINS=optional-extra-domain.example,another-temp-domain.example
 ```
 
-`MONGO_URI` is also accepted as an alternative name for `MONGODB_URI`, but configure only one. `GOOGLE_CLIENT_ID` is optional until Google OAuth is set up. `SMTP_PASS` must be a Google App Password, not your normal Google password. Do not add `PORT` on Vercel; Vercel manages it. Redeploy after changing variables.
+`MONGO_URI` is also accepted as an alternative name for `MONGODB_URI`, but configure only one. `GOOGLE_CLIENT_ID` is optional until Google OAuth is set up. `SMTP_PASS` must be a 16-character Google App Password created after enabling 2-Step Verification, not your normal Gmail password. Spaces in a pasted App Password are accepted. `EMAIL_USER`/`EMAIL_APP_PASSWORD` and `MAIL_USER`/`MAIL_PASS` are also accepted aliases. Do not add `PORT` on Vercel; Vercel manages it. Redeploy after changing variables.
+
+After deployment, open `https://mowell-api.grapaxels.in/health/email`. It should return `"configured":true`. The endpoint never returns the email address or password.
 
 Generate `JWT_SECRET` locally with PowerShell:
 

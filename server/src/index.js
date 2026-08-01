@@ -39,14 +39,50 @@ const disposableDomains = new Set([
   ...String(process.env.BLOCKED_EMAIL_DOMAINS || "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean)
 ]);
 const emailCodeHash = (email, code) => crypto.createHmac("sha256", process.env.JWT_SECRET).update(`${email}:${code}`).digest("hex");
+const smtpSettings = () => {
+  const user = String(process.env.SMTP_USER || process.env.EMAIL_USER || process.env.MAIL_USER || "").trim();
+  // Google displays App Passwords in groups. Removing whitespace makes either
+  // the grouped or ungrouped value safe to paste into Vercel.
+  const pass = String(process.env.SMTP_PASS || process.env.EMAIL_APP_PASSWORD || process.env.MAIL_PASS || "").replace(/\s/g, "");
+  const host = String(process.env.SMTP_HOST || "smtp.gmail.com").trim();
+  const parsedPort = Number(process.env.SMTP_PORT || 465);
+  const port = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 465;
+  const secure = process.env.SMTP_SECURE == null
+    ? port === 465
+    : String(process.env.SMTP_SECURE).toLowerCase() === "true";
+  return { user, pass, host, port, secure };
+};
 const mailer = () => {
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) throw new Error("Email verification is not configured");
+  const smtp = smtpSettings();
+  if (!smtp.user || !smtp.pass) {
+    const error = new Error("Email verification is not configured");
+    error.code = "SMTP_NOT_CONFIGURED";
+    throw error;
+  }
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || "smtp.gmail.com", port: Number(process.env.SMTP_PORT || 465),
-    secure: String(process.env.SMTP_SECURE || "true").toLowerCase() === "true",
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure,
+    auth: { user: smtp.user, pass: smtp.pass },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000
   });
 };
+const publicMailError = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  const responseCode = Number(error?.responseCode || 0);
+  if (code === "SMTP_NOT_CONFIGURED") return "Email is not configured on the server. Add SMTP_USER and SMTP_PASS in Vercel, then redeploy";
+  if (code === "EAUTH" || responseCode === 535) return "Gmail rejected the account or App Password. Use a Google App Password, not the normal Gmail password";
+  if (["ETIMEDOUT", "ECONNECTION", "ESOCKET", "ECONNREFUSED"].includes(code)) return "The mail server could not be reached. Check SMTP_HOST, SMTP_PORT, and SMTP_SECURE";
+  return "Verification email could not be sent. Check the Vercel function log for the SMTP error";
+};
+const logMailError = (error) => console.error("Mowell verification mail failed", {
+  code: error?.code || null,
+  command: error?.command || null,
+  responseCode: error?.responseCode || null,
+  message: error?.message || "Unknown SMTP error"
+});
 const validateEmailDomain = async (email) => {
   const domain = email.split("@")[1]?.toLowerCase();
   if (!domain || disposableDomains.has(domain) || [...disposableDomains].some((d) => domain.endsWith(`.${d}`))) throw new Error("Temporary email addresses are not allowed");
@@ -61,8 +97,9 @@ const sendVerification = async (user, force = false) => {
   user.verificationExpiresAt = new Date(now + 10 * 60 * 1000);
   user.verificationLastSentAt = new Date(now);
   user.verificationAttempts = 0;
+  const smtp = smtpSettings();
   await mailer().sendMail({
-    from: process.env.SMTP_FROM || `Mowell by Grapaxels <${process.env.SMTP_USER}>`, to: user.email,
+    from: process.env.SMTP_FROM || `Mowell by Grapaxels <${smtp.user}>`, to: user.email,
     subject: `${code} is your Mowell verification code`,
     text: `Your Mowell verification code is ${code}. It expires in 10 minutes. If you did not request this, ignore this email.`,
     html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h1 style="margin:0">Mowell</h1><p style="color:#7357f6">by Grapaxels</p><p>Use this code to verify your email:</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;background:#ede8ff;border-radius:16px;text-align:center">${code}</div><p>This code expires in 10 minutes.</p></div>`
@@ -83,6 +120,17 @@ const auth = async (req, res, next) => {
 };
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "mowell-api" }));
+app.get("/health/email", (_req, res) => {
+  const smtp = smtpSettings();
+  res.json({
+    ok: Boolean(smtp.user && smtp.pass),
+    configured: Boolean(smtp.user && smtp.pass),
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure,
+    fromConfigured: Boolean(process.env.SMTP_FROM)
+  });
+});
 app.get("/v1/app/version", (_req, res) => res.json({
   versionCode: Number(process.env.ANDROID_VERSION_CODE || 1),
   versionName: process.env.ANDROID_VERSION_NAME || "0.1.0",
@@ -104,7 +152,10 @@ app.post("/v1/auth/register", async (req, res) => {
     if (await User.exists({ $or: [{ email }, { username }] })) return res.status(409).json({ error: "Email or username is already in use" });
     const user = await User.create({ email, username, displayName, passwordHash: await bcrypt.hash(password, 12), emailVerified: false });
     try { await sendVerification(user, true); }
-    catch { return res.status(503).json({ verificationRequired: true, email, error: "Account created, but verification mail could not be sent. Check mail settings and tap Resend" }); }
+    catch (error) {
+      logMailError(error);
+      return res.status(503).json({ verificationRequired: true, email, error: publicMailError(error) });
+    }
     res.status(202).json({ verificationRequired: true, email, message: "Verification code sent" });
   } catch (error) { res.status(500).json({ error: "Could not create account" }); }
 });
@@ -116,7 +167,8 @@ app.post("/v1/auth/login", async (req, res) => {
     return res.status(401).json({ error: "Incorrect email, username, or password" });
   }
   if (!user.emailVerified) {
-    try { await sendVerification(user); } catch { return res.status(503).json({ error: "Could not send verification email" }); }
+    try { await sendVerification(user); }
+    catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
     return res.status(403).json({ error: "Verify your email to continue", verificationRequired: true, email: user.email });
   }
   user.lastSeenAt = new Date(); await user.save();
@@ -143,7 +195,8 @@ app.post("/v1/auth/resend-verification", async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const user = await User.findOne({ email }).select("+verificationLastSentAt +verificationCodeHash +verificationExpiresAt +verificationAttempts");
   if (user && !user.emailVerified) {
-    try { await sendVerification(user); } catch { return res.status(503).json({ error: "Could not send verification email" }); }
+    try { await sendVerification(user); }
+    catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
   }
   res.json({ ok: true, message: "If the account is pending, a verification code has been sent" });
 });

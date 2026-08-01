@@ -203,7 +203,7 @@ private fun AuthScreen(vm: MowellViewModel) {
                 Spacer(Modifier.height(28.dp))
                 ClayCard(Lavender) {
                     Text("Verify your email", fontSize = 27.sp, fontWeight = FontWeight.Black)
-                    Text("We sent a 6-digit code to $verificationEmail. It expires in 10 minutes.", color = Muted)
+                    Text("We sent a 6-digit code to ${maskEmail(verificationEmail.orEmpty())}. It expires in 10 minutes.", color = Muted)
                     ClayField(code, { code = it.filter(Char::isDigit).take(6) }, "Verification code")
                     if (error != null) Text(error!!, color = if (error!!.contains("sent", true)) Violet else Color(0xFFB3261E), fontSize = 13.sp)
                     Button(onClick = { vm.verifyEmail(code) }, enabled = code.length == 6 && !busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(20.dp)) { if (busy) CircularProgressIndicator(Modifier.size(21.dp), color = Color.White, strokeWidth = 2.dp) else Text("Verify and continue") }
@@ -666,4 +666,10 @@ private fun Avatar(name: String, size: Dp, color: Color, avatarUrl: String? = nu
 }
 
 private fun time(timestamp: Long) = if (timestamp == 0L) "now" else SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+private fun maskEmail(email: String): String {
+    val local = email.substringBefore('@')
+    val domain = email.substringAfter('@', "")
+    val suffix = domain.substringAfterLast('.', "").takeLast(2)
+    return "${local.take(2).padEnd(2, '*')}****@****.**${suffix.padStart(2, '*')}"
+}
 private fun route(route: String) = when (route) { "INTERNET" -> "INTERNET"; "BLUETOOTH" -> "NEARBY"; "LOCAL_ONLY" -> "SAVED"; else -> route }
