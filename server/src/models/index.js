@@ -6,7 +6,14 @@ const userSchema = new mongoose.Schema({
   displayName: { type: String, required: true, trim: true, maxlength: 60 },
   passwordHash: { type: String, select: false },
   googleSub: { type: String, unique: true, sparse: true, select: false },
+  emailVerified: { type: Boolean, default: false },
+  verificationCodeHash: { type: String, select: false },
+  verificationExpiresAt: { type: Date, select: false },
+  verificationLastSentAt: { type: Date, select: false },
+  verificationAttempts: { type: Number, default: 0, select: false },
   avatarUrl: String,
+  avatarData: { type: Buffer, select: false },
+  avatarMime: { type: String, select: false },
   lastSeenAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
@@ -48,12 +55,22 @@ export const Media = mongoose.model("Media", mediaSchema);
 
 const callSignalSchema = new mongoose.Schema({
   room: { type: String, required: true, index: true, maxlength: 100 },
-  conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  type: { type: String, enum: ["offer", "answer", "ice", "hangup"], required: true },
+  target: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  type: { type: String, enum: ["join", "offer", "answer", "ice", "leave"], required: true },
   payload: { type: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, default: () => new Date(Date.now() + 60 * 60 * 1000), expires: 0 }
 }, { timestamps: true });
-callSignalSchema.index({ room: 1, conversation: 1, _id: 1 });
+callSignalSchema.index({ room: 1, _id: 1 });
 
 export const CallSignal = mongoose.model("CallSignal", callSignalSchema);
+
+const callRoomSchema = new mongoose.Schema({
+  room: { type: String, required: true, unique: true, maxlength: 100 },
+  participants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  video: { type: Boolean, default: false },
+  expiresAt: { type: Date, default: () => new Date(Date.now() + 6 * 60 * 60 * 1000), expires: 0 }
+}, { timestamps: true });
+
+export const CallRoom = mongoose.model("CallRoom", callRoomSchema);

@@ -11,7 +11,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +34,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -45,6 +50,8 @@ import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Logout
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.ContactPhone
 import androidx.compose.material.icons.rounded.Description
@@ -82,15 +89,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -103,6 +115,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grapaxels.mowell.MowellViewModel
 import com.grapaxels.mowell.CallSession
+import com.grapaxels.mowell.BuildConfig
 import com.grapaxels.mowell.MowellMapActivity
 import com.grapaxels.mowell.mapHtml
 import com.grapaxels.mowell.auth.UserProfile
@@ -112,6 +125,9 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.URL
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -149,12 +165,18 @@ fun MowellApp(vm: MowellViewModel) {
 
 @Composable
 private fun SplashScreen() {
+    val reveal = remember { Animatable(0.72f) }
+    val fade = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        fade.animateTo(1f, tween(280))
+        reveal.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
+    }
     Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color.White, Lavender, Canvas))), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.graphicsLayer { scaleX = reveal.value; scaleY = reveal.value; alpha = fade.value }, horizontalAlignment = Alignment.CenterHorizontally) {
             OrbLogo(104.dp)
             Spacer(Modifier.height(24.dp))
             Text("Mowell", fontSize = 42.sp, fontWeight = FontWeight.Black, color = Ink)
-            Text("communication, made human.", color = Violet, fontStyle = FontStyle.Italic, fontSize = 17.sp)
+            Text("by Grapaxels", color = Violet, fontStyle = FontStyle.Italic, fontSize = 17.sp)
             Spacer(Modifier.height(10.dp))
             Text("BY GRAPAXELS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
         }
@@ -165,12 +187,33 @@ private fun SplashScreen() {
 private fun AuthScreen(vm: MowellViewModel) {
     val busy by vm.authBusy.collectAsStateWithLifecycle()
     val error by vm.authError.collectAsStateWithLifecycle()
+    val verificationEmail by vm.verificationEmail.collectAsStateWithLifecycle()
     var register by remember { mutableStateOf(false) }
     var identity by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+
+    if (verificationEmail != null) {
+        var code by remember(verificationEmail) { mutableStateOf("") }
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp), verticalArrangement = Arrangement.Center) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) { OrbLogo(58.dp); Spacer(Modifier.width(14.dp)); Column { Text("Mowell", fontSize = 31.sp, fontWeight = FontWeight.Black); Text("by Grapaxels", color = Violet) } }
+                Spacer(Modifier.height(28.dp))
+                ClayCard(Lavender) {
+                    Text("Verify your email", fontSize = 27.sp, fontWeight = FontWeight.Black)
+                    Text("We sent a 6-digit code to $verificationEmail. It expires in 10 minutes.", color = Muted)
+                    ClayField(code, { code = it.filter(Char::isDigit).take(6) }, "Verification code")
+                    if (error != null) Text(error!!, color = if (error!!.contains("sent", true)) Violet else Color(0xFFB3261E), fontSize = 13.sp)
+                    Button(onClick = { vm.verifyEmail(code) }, enabled = code.length == 6 && !busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(20.dp)) { if (busy) CircularProgressIndicator(Modifier.size(21.dp), color = Color.White, strokeWidth = 2.dp) else Text("Verify and continue") }
+                    OutlinedButton(onClick = vm::resendVerification, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) { Text("Resend code") }
+                    TextButtonLine("Use a different account", vm::cancelVerification)
+                }
+            }
+        }
+        return
+    }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp), verticalArrangement = Arrangement.Center) {
         item {
@@ -206,9 +249,28 @@ private fun AuthScreen(vm: MowellViewModel) {
 @Composable
 private fun MainExperience(vm: MowellViewModel) {
     val context = LocalContext.current
+    val update by vm.update.collectAsStateWithLifecycle()
+    val showUpdate by vm.showUpdatePopup.collectAsStateWithLifecycle()
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf<ConversationEntity?>(null) }
+    BackHandler {
+        when {
+            profile != null -> profile = null
+            openChat != null -> openChat = null
+            page != Page.CHATS -> page = Page.CHATS
+            else -> Unit
+        }
+    }
+    if (showUpdate && update != null) {
+        AlertDialog(
+            onDismissRequest = vm::dismissUpdate,
+            title = { Text("Mowell ${update!!.versionName} is available", fontWeight = FontWeight.Black) },
+            text = { Text(if (BuildConfig.SELF_UPDATE) "Download and update from inside Mowell. Android will ask once before installing the signed update." else "Install this verified update through Google Play.") },
+            confirmButton = { Button(onClick = { (context as? Activity)?.let(vm::installUpdate) }) { Text("Update now") } },
+            dismissButton = { OutlinedButton(onClick = vm::dismissUpdate) { Text("Later") } }
+        )
+    }
     when {
         profile != null -> ProfileScreen(profile!!, { profile = null })
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
@@ -270,13 +332,16 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
 private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit) {
     ClayCard(if (conversation.isGroup) Lavender else ClayWhite, Modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Avatar(conversation.title, 54.dp, if (conversation.isGroup) Violet else Ink)
+            Avatar(conversation.title, 54.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(conversation.title, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 Text(conversation.subtitle, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
             }
-            Text(time(conversation.updatedAt), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Column(horizontalAlignment = Alignment.End) {
+                Text(time(conversation.updatedAt), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                if (conversation.unreadCount > 0) Box(Modifier.padding(top = 6.dp).clip(CircleShape).background(Violet).padding(horizontal = 8.dp, vertical = 3.dp)) { Text(conversation.unreadCount.coerceAtMost(99).toString(), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black) }
+            }
         }
     }
 }
@@ -295,7 +360,7 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
         items(users, key = { it.id }) { user ->
             ClayCard(ClayWhite, Modifier.clickable { onUser(user) }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(user.displayName, 50.dp, Violet); Spacer(Modifier.width(12.dp))
+                    Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
                     Box(Modifier.clip(RoundedCornerShape(14.dp)).background(Lime).padding(10.dp)) { Icon(Icons.Rounded.ChatBubble, "Chat", Modifier.size(20.dp)) }
                 }
@@ -313,7 +378,7 @@ private fun CallsScreen(vm: MowellViewModel, modifier: Modifier, onCall: (CallSe
         items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation ->
             ClayCard(if (conversation.isGroup) Lavender else ClayWhite) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(conversation.title, 52.dp, if (conversation.isGroup) Violet else Ink); Spacer(Modifier.width(12.dp))
+                    Avatar(conversation.title, 52.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) { Text(conversation.title, fontWeight = FontWeight.Bold); Text(if (conversation.isGroup) "Group call" else "Direct call", color = Muted, fontSize = 12.sp) }
                     IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
                     IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
@@ -349,12 +414,38 @@ private fun NearbyScreen(vm: MowellViewModel, modifier: Modifier) {
 @Composable
 private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
     val session by vm.session.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
+    val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var editingName by remember { mutableStateOf(false) }
+    var name by remember(session?.user?.displayName) { mutableStateOf(session?.user?.displayName.orEmpty()) }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let(vm::updateProfilePicture) }
+    if (editingName) {
+        AlertDialog(
+            onDismissRequest = { editingName = false },
+            title = { Text("Edit your name", fontWeight = FontWeight.Black) },
+            text = { Column { ClayField(name, { name = it }, "Display name"); Text("Your @username is permanent and cannot be edited.", color = Muted, fontSize = 12.sp) } },
+            confirmButton = { Button(enabled = name.trim().length in 2..60, onClick = { vm.updateDisplayName(name); editingName = false }) { Text("Save") } },
+            dismissButton = { OutlinedButton(onClick = { editingName = false }) { Text("Cancel") } }
+        )
+    }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("You", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("Identity and privacy.", color = Muted) }
         item {
             ClayCard(Lavender) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Avatar(session?.user?.displayName ?: "M", 62.dp, Violet); Spacer(Modifier.width(13.dp)); Column { Text(session?.user?.displayName ?: "Mowell user", fontWeight = FontWeight.Black, fontSize = 20.sp); Text("@${session?.user?.username}", color = Violet); Text(session?.user?.email.orEmpty(), color = Muted, fontSize = 12.sp) } }
+                Row(verticalAlignment = Alignment.CenterVertically) { Avatar(session?.user?.displayName ?: "M", 62.dp, Violet, session?.user?.avatarUrl); Spacer(Modifier.width(13.dp)); Column { Text(session?.user?.displayName ?: "Mowell user", fontWeight = FontWeight.Black, fontSize = 20.sp); Text("@${session?.user?.username}", color = Violet); Text(session?.user?.email.orEmpty(), color = Muted, fontSize = 12.sp) } }
                 Spacer(Modifier.height(12.dp)); Text("You stay signed in on this phone until you use Log out below.", fontSize = 12.sp, color = Muted)
+                OutlinedButton(onClick = { photoPicker.launch("image/*") }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Update profile picture") }
+                OutlinedButton(onClick = { editingName = true }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Edit display name") }
+            }
+        }
+        item {
+            ClayCard(ClayWhite) {
+                Text("App updates", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                Text("Installed version ${BuildConfig.VERSION_NAME}", color = Muted, fontSize = 12.sp)
+                Text(updateStatus, color = if (update != null) Violet else Muted, fontSize = 13.sp)
+                if (update != null) Button(onClick = { (context as? Activity)?.let(vm::installUpdate) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp)) { Icon(Icons.Rounded.CloudDownload, null); Spacer(Modifier.width(8.dp)); Text("Update to ${update!!.versionName}") }
+                else OutlinedButton(onClick = vm::checkForUpdates, Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp)) { Text("Check for updates") }
             }
         }
         item { OutlinedButton(onClick = vm::logout, Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(20.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB3261E))) { Icon(Icons.Rounded.Logout, null); Spacer(Modifier.width(8.dp)); Text("Log out on this phone", fontWeight = FontWeight.Bold) } }
@@ -372,7 +463,7 @@ private fun ProfileScreen(conversation: ConversationEntity, back: () -> Unit) {
         LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
                 Spacer(Modifier.height(12.dp))
-                Avatar(conversation.title, 116.dp, Violet)
+                Avatar(conversation.title, 116.dp, Violet, conversation.avatarUrl)
                 Spacer(Modifier.height(14.dp))
                 Text(conversation.title, fontSize = 28.sp, fontWeight = FontWeight.Black)
                 if (!conversation.username.isNullOrBlank()) Text("@${conversation.username}", color = Violet, fontSize = 16.sp)
@@ -408,12 +499,45 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     val conversation = vm.conversations.collectAsStateWithLifecycle().value.find { it.id == conversationId }
     var text by remember { mutableStateOf("") }
     var attachments by remember { mutableStateOf(false) }
+    var unlocked by remember(conversationId) { mutableStateOf(!vm.isChatLocked(conversationId)) }
+    var hasLock by remember(conversationId) { mutableStateOf(vm.isChatLocked(conversationId)) }
+    var unlockCode by remember { mutableStateOf("") }
+    var unlockError by remember { mutableStateOf(false) }
+    var settingLock by remember { mutableStateOf(false) }
+    var newCode by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { vm.uploadAttachment(conversationId, it) } }
     val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri -> uri?.let { vm.shareContact(conversationId, it) } }
     val send = { vm.send(conversationId, text); text = "" }
+    if (!unlocked) {
+        BackHandler { back() }
+        Box(Modifier.fillMaxSize().background(Canvas).padding(24.dp), contentAlignment = Alignment.Center) {
+            ClayCard(Lavender) {
+                Icon(Icons.Rounded.Lock, null, tint = Violet, modifier = Modifier.size(38.dp))
+                Text("Chat locked", fontSize = 25.sp, fontWeight = FontWeight.Black)
+                Text("Enter this chat's passcode.", color = Muted)
+                ClayField(unlockCode, { unlockCode = it; unlockError = false }, "Passcode", password = true)
+                if (unlockError) Text("Incorrect passcode", color = Color(0xFFB3261E))
+                Button(onClick = { if (vm.verifyChatPasscode(conversationId, unlockCode)) unlocked = true else unlockError = true }, Modifier.fillMaxWidth()) { Text("Unlock") }
+                OutlinedButton(onClick = back, Modifier.fillMaxWidth()) { Text("Back to chats") }
+            }
+        }
+        return
+    }
+    if (settingLock) {
+        AlertDialog(onDismissRequest = { settingLock = false }, title = { Text("Lock this chat") },
+            text = { Column { Text("Set a passcode with at least 4 characters.", color = Muted); ClayField(newCode, { newCode = it }, "New passcode", password = true) } },
+            confirmButton = { Button(enabled = newCode.length >= 4, onClick = { vm.setChatPasscode(conversationId, newCode); hasLock = true; settingLock = false }) { Text("Lock") } },
+            dismissButton = { OutlinedButton(onClick = { settingLock = false }) { Text("Cancel") } })
+    }
     LaunchedEffect(conversationId) {
+        vm.markConversationRead(conversationId)
         while (true) { vm.syncConversation(conversationId); delay(2_000) }
+    }
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+        vm.markConversationRead(conversationId)
     }
     Scaffold(
         containerColor = Canvas,
@@ -421,11 +545,12 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             Row(Modifier.fillMaxWidth().background(Canvas).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
                 Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(conversation?.title ?: "M", 42.dp, Violet); Spacer(Modifier.width(9.dp))
+                    Avatar(conversation?.title ?: "M", 42.dp, Violet, conversation?.avatarUrl); Spacer(Modifier.width(9.dp))
                     Column { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
                 }
                 IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
                 IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
+                IconButton(onClick = { if (hasLock) { vm.setChatPasscode(conversationId, null); hasLock = false } else settingLock = true }) { Icon(if (hasLock) Icons.Rounded.LockOpen else Icons.Rounded.Lock, "Chat lock", tint = Violet) }
             }
         },
         bottomBar = {
@@ -443,9 +568,9 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             }
         }
     ) { padding ->
-        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState, contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             items(messages, key = { it.id }) { message ->
-                MessageClay(message, openAttachment = { vm.openAttachment(context, message) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group)) })
+                MessageClay(message, openAttachment = { vm.openAttachment(context, message) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
             }
         }
     }
@@ -522,10 +647,23 @@ private fun ClayField(value: String, change: (String) -> Unit, label: String, pa
 private fun TextButtonLine(text: String, click: () -> Unit) { Text(text, color = VioletDark, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.fillMaxWidth().clickable(onClick = click).padding(vertical = 9.dp)) }
 
 @Composable
-private fun OrbLogo(size: Dp) { Box(Modifier.size(size).shadow(10.dp, CircleShape, spotColor = Violet.copy(alpha = .45f)).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFFB9A8FF), Violet, VioletDark))).border(2.dp, Color.White.copy(alpha = .8f), CircleShape), contentAlignment = Alignment.Center) { Text("M", color = Color.White, fontSize = (size.value * .45f).sp, fontWeight = FontWeight.Black) } }
+private fun OrbLogo(size: Dp) { Image(painterResource(com.grapaxels.mowell.R.drawable.mowell_logo), "Mowell", Modifier.size(size).shadow(10.dp, RoundedCornerShape(size * .24f)).clip(RoundedCornerShape(size * .24f)), contentScale = ContentScale.Fit) }
 
 @Composable
-private fun Avatar(name: String, size: Dp, color: Color) { Box(Modifier.size(size).shadow(5.dp, CircleShape).clip(CircleShape).background(color).border(2.dp, Color.White.copy(alpha = .8f), CircleShape), contentAlignment = Alignment.Center) { Text(name.take(1).uppercase(), color = if (color == Lime) Ink else Color.White, fontSize = (size.value * .40f).sp, fontWeight = FontWeight.Black) } }
+private fun Avatar(name: String, size: Dp, color: Color, avatarUrl: String? = null) {
+    val bitmap by produceState<android.graphics.Bitmap?>(null, avatarUrl) {
+        value = if (avatarUrl.isNullOrBlank()) null else withContext(Dispatchers.IO) {
+            runCatching {
+                val absolute = if (avatarUrl.startsWith("/")) "https://mowell-api.grapaxels.in$avatarUrl" else avatarUrl
+                URL(absolute).openStream().use(android.graphics.BitmapFactory::decodeStream)
+            }.getOrNull()
+        }
+    }
+    Box(Modifier.size(size).shadow(5.dp, CircleShape).clip(CircleShape).background(color).border(2.dp, Color.White.copy(alpha = .8f), CircleShape), contentAlignment = Alignment.Center) {
+        if (bitmap != null) Image(bitmap!!.asImageBitmap(), name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        else Text(name.take(1).uppercase(), color = if (color == Lime) Ink else Color.White, fontSize = (size.value * .40f).sp, fontWeight = FontWeight.Black)
+    }
+}
 
 private fun time(timestamp: Long) = if (timestamp == 0L) "now" else SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
 private fun route(route: String) = when (route) { "INTERNET" -> "INTERNET"; "BLUETOOTH" -> "NEARBY"; "LOCAL_ONLY" -> "SAVED"; else -> route }

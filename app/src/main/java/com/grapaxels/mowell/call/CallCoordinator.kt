@@ -12,6 +12,8 @@ object CallCoordinator {
             putExtra("room", session.room)
             putExtra("video", session.video)
             putExtra("initiator", session.initiator)
+            putExtra("group", session.group)
+            putExtra("avatar", session.avatarUrl)
         })
     }
 

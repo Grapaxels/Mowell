@@ -19,7 +19,7 @@ data class UserProfile(
 )
 
 data class AuthSession(val token: String, val user: UserProfile)
-data class AuthResult(val session: AuthSession? = null, val error: String? = null)
+data class AuthResult(val session: AuthSession? = null, val error: String? = null, val verificationEmail: String? = null)
 data class RemoteConversation(
     val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
     val username: String? = null, val avatarUrl: String? = null,
@@ -66,6 +66,68 @@ class AuthRepository(context: Context) {
     )
 
     suspend fun google(idToken: String): AuthResult = postAuth("/v1/auth/google", JSONObject().put("idToken", idToken))
+
+    suspend fun verifyEmail(email: String, code: String): AuthResult = postAuth(
+        "/v1/auth/verify-email", JSONObject().put("email", email).put("code", code)
+    )
+
+    suspend fun resendVerification(email: String): AuthResult = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().put("email", email)
+            client.newCall(Request.Builder().url("$serverUrl/v1/auth/resend-verification").post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) AuthResult(error = json.optString("error", "Could not resend code"), verificationEmail = email)
+                else AuthResult(error = "A new code was sent", verificationEmail = email)
+            }
+        } catch (error: Exception) { AuthResult(error = error.message ?: "Could not resend code", verificationEmail = email) }
+    }
+
+    suspend fun validateSession(): AuthResult = withContext(Dispatchers.IO) {
+        try {
+            val session = savedSession ?: return@withContext AuthResult(error = "Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/me").header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (json.optBoolean("verificationRequired")) return@withContext AuthResult(error = json.optString("error", "Verify your email"), verificationEmail = json.optString("email"))
+                if (!response.isSuccessful) return@withContext AuthResult(error = json.optString("error", "Session validation failed"))
+                val refreshed = AuthSession(session.token, parseUser(json.getJSONObject("user")))
+                save(refreshed)
+                AuthResult(session = refreshed)
+            }
+        } catch (error: Exception) { AuthResult(error = error.message ?: "Could not validate session") }
+    }
+
+    suspend fun updateDisplayName(displayName: String): AuthResult = withContext(Dispatchers.IO) {
+        try {
+            val session = savedSession ?: return@withContext AuthResult(error = "Not signed in")
+            val body = JSONObject().put("displayName", displayName.trim())
+            val request = Request.Builder().url("$serverUrl/v1/me").header("Authorization", "Bearer ${session.token}")
+                .patch(body.toString().toRequestBody(jsonType)).build()
+            client.newCall(request).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) return@withContext AuthResult(error = json.optString("error", "Could not update name"))
+                val updated = AuthSession(session.token, parseUser(json.getJSONObject("user")))
+                save(updated)
+                AuthResult(session = updated)
+            }
+        } catch (error: Exception) { AuthResult(error = error.message ?: "Could not update name") }
+    }
+
+    suspend fun updateAvatar(data: ByteArray, mimeType: String = "image/jpeg"): AuthResult = withContext(Dispatchers.IO) {
+        try {
+            require(data.size <= 1_572_864) { "Profile photo must be 1.5 MB or smaller" }
+            val session = savedSession ?: return@withContext AuthResult(error = "Not signed in")
+            val body = JSONObject().put("mimeType", mimeType).put("data", Base64.encodeToString(data, Base64.NO_WRAP))
+            val request = Request.Builder().url("$serverUrl/v1/me/avatar").header("Authorization", "Bearer ${session.token}")
+                .post(body.toString().toRequestBody(jsonType)).build()
+            client.newCall(request).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) return@withContext AuthResult(error = json.optString("error", "Could not update profile photo"))
+                val updated = AuthSession(session.token, parseUser(json.getJSONObject("user")))
+                save(updated)
+                AuthResult(session = updated)
+            }
+        } catch (error: Exception) { AuthResult(error = error.message ?: "Could not update profile photo") }
+    }
 
     suspend fun searchUsers(query: String): Result<List<UserProfile>> = withContext(Dispatchers.IO) {
         runCatching {
@@ -204,6 +266,7 @@ class AuthRepository(context: Context) {
             if (serverUrl.contains("example.invalid")) return@withContext AuthResult(error = "Set your Mowell server URL first")
             val response = client.newCall(Request.Builder().url(serverUrl + path).post(body.toString().toRequestBody(jsonType)).build()).execute()
             val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (json.optBoolean("verificationRequired")) return@withContext AuthResult(error = json.optString("message", json.optString("error", "Verify your email")), verificationEmail = json.optString("email"))
             if (!response.isSuccessful) return@withContext AuthResult(error = json.optString("error", "Request failed"))
             val session = AuthSession(json.getString("token"), parseUser(json.getJSONObject("user")))
             save(session)

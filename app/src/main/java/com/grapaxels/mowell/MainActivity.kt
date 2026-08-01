@@ -1,10 +1,13 @@
 package com.grapaxels.mowell
 
 import android.Manifest
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
@@ -35,6 +38,7 @@ import com.grapaxels.mowell.transport.Route
 import com.grapaxels.mowell.transport.TransportRouter
 import com.grapaxels.mowell.ui.MowellApp
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,6 +48,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -55,7 +62,8 @@ data class CallSession(
     val room: String,
     val video: Boolean,
     val group: Boolean = false,
-    val initiator: Boolean = false
+    val initiator: Boolean = false,
+    val avatarUrl: String? = null
 )
 
 class MainActivity : ComponentActivity() {
@@ -93,6 +101,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private val notifier = MessageNotifier(application)
     val bluetooth = BluetoothTransport(application)
     private val router = TransportRouter(application, bluetooth)
+    private val chatLocks = application.getSharedPreferences("mowell_chat_locks", Context.MODE_PRIVATE)
     val conversations = dao.observeConversations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var selectedPeer: String? = null
 
@@ -102,10 +111,16 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val authBusy: StateFlow<Boolean> = _authBusy.asStateFlow()
     private val _authError = MutableStateFlow<String?>(null)
     val authError: StateFlow<String?> = _authError.asStateFlow()
+    private val _verificationEmail = MutableStateFlow<String?>(null)
+    val verificationEmail: StateFlow<String?> = _verificationEmail.asStateFlow()
     private val _userResults = MutableStateFlow<List<UserProfile>>(emptyList())
     val userResults: StateFlow<List<UserProfile>> = _userResults.asStateFlow()
     private val _update = MutableStateFlow<UpdateInfo?>(null)
     val update: StateFlow<UpdateInfo?> = _update.asStateFlow()
+    private val _showUpdatePopup = MutableStateFlow(false)
+    val showUpdatePopup: StateFlow<Boolean> = _showUpdatePopup.asStateFlow()
+    private val _updateStatus = MutableStateFlow("Ready to check")
+    val updateStatus: StateFlow<String> = _updateStatus.asStateFlow()
     private val syncCursors = ConcurrentHashMap<String, Long>()
     private val syncing = ConcurrentHashMap.newKeySet<String>()
     private val syncingAll = AtomicBoolean(false)
@@ -114,7 +129,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     init {
         bluetooth.startListening()
         viewModelScope.launch {
-            dao.upsertConversation(ConversationEntity("general", "Mowell Circle", "Your private online + nearby space", true, System.currentTimeMillis()))
+            val general = conversations.value.find { it.id == "general" }
+            dao.upsertConversation(general ?: ConversationEntity("general", "Mowell Circle", "Your private online + nearby space", true, System.currentTimeMillis()))
             bluetooth.onMessage = { raw ->
                 viewModelScope.launch {
                     val packet = runCatching { JSONObject(raw) }.getOrNull()
@@ -122,11 +138,20 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                     val kind = packet?.optString("kind", "text") ?: "text"
                     val message = MessageEntity(packet?.optString("clientId").takeUnless { it.isNullOrBlank() } ?: UUID.randomUUID().toString(), "general", "Nearby peer", body, System.currentTimeMillis(), false, Route.BLUETOOTH.name, "received", kind)
                     dao.insertMessage(message)
-                    dao.upsertConversation(ConversationEntity("general", "Mowell Circle", preview(message), true, message.sentAt))
-                    notifier.show("Mowell Circle", message)
+                    val current = conversations.value.find { it.id == "general" }
+                    dao.upsertConversation(current?.copy(subtitle = preview(message), updatedAt = message.sentAt) ?: ConversationEntity("general", "Mowell Circle", preview(message), true, message.sentAt))
+                    val unread = dao.incrementUnread("general")
+                    notifier.show("Mowell Circle", message, unread)
                 }
             }
-            if (_session.value != null) _update.value = updater.check()
+            if (_session.value != null) {
+                val validation = auth.validateSession()
+                when {
+                    validation.session != null -> { _session.value = validation.session; refreshUpdate(showPopup = true) }
+                    validation.verificationEmail != null -> { _session.value = null; _verificationEmail.value = validation.verificationEmail; _authError.value = validation.error }
+                    else -> refreshUpdate(showPopup = true)
+                }
+            }
         }
         viewModelScope.launch {
             while (isActive) {
@@ -137,6 +162,13 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun messages(conversationId: String) = dao.observeMessages(conversationId)
+
+    fun markConversationRead(conversationId: String) {
+        viewModelScope.launch {
+            dao.markRead(conversationId)
+            notifier.clearConversation(conversationId)
+        }
+    }
 
     fun send(conversationId: String, body: String) {
         sendTyped(conversationId, body, "text")
@@ -173,7 +205,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val notify = initialSyncComplete
             remoteConversations.forEach { remote ->
                 val existing = conversations.value.find { it.id == remote.id }
-                dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members))
+                dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members, existing?.unreadCount ?: 0))
                 syncConversationInternal(remote.id, remote.title, notify)
             }
             initialSyncComplete = true
@@ -184,13 +216,17 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         val after = syncCursors[conversationId] ?: 0L
         auth.fetchMessages(conversationId, after).onSuccess { remote ->
             remote.forEach { item ->
+                val isNew = !dao.hasMessage(item.id)
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
                     item.body, item.sentAt, item.outgoing, Route.INTERNET.name, "sent", item.kind,
                     item.attachmentId, item.attachmentMime, item.attachmentName
                 )
                 dao.insertMessage(message)
-                if (notify && !item.outgoing) notifier.show(title, message)
+                if (notify && isNew && !item.outgoing) {
+                    val unread = dao.incrementUnread(conversationId)
+                    notifier.show(title, message, unread, conversations.value.find { it.id == conversationId }?.avatarUrl)
+                }
                 if (!item.outgoing && item.kind == "call_end") {
                     runCatching { JSONObject(item.body).optString("room") }.getOrNull()?.takeIf { it.isNotBlank() }?.let { CallCoordinator.endIfActive(getApplication(), it) }
                 }
@@ -208,7 +244,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         val room = "Mowell-${UUID.randomUUID().toString().replace("-", "")}"
         val group = conversations.value.find { it.id == conversationId }?.isGroup ?: false
         sendTyped(conversationId, JSONObject().put("room", room).put("video", video).put("group", group).toString(), "call")
-        return CallSession(conversationId, name, room, video, group, initiator = true)
+        val avatar = conversations.value.find { it.id == conversationId }?.avatarUrl
+        return CallSession(conversationId, name, room, video, group, initiator = true, avatarUrl = avatar)
     }
 
     fun launchCall(context: Context, session: CallSession) = CallCoordinator.launch(context, session)
@@ -297,10 +334,30 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             _authBusy.value = true; _authError.value = null
             val result = block()
             _authBusy.value = false
-            if (result.session != null) { _session.value = result.session; _update.value = updater.check() }
-            else _authError.value = result.error
+            if (result.session != null) { _session.value = result.session; _verificationEmail.value = null; refreshUpdate(showPopup = true) }
+            else {
+                if (!result.verificationEmail.isNullOrBlank()) _verificationEmail.value = result.verificationEmail
+                _authError.value = result.error
+            }
         }
     }
+
+    fun verifyEmail(code: String) {
+        val email = _verificationEmail.value ?: return
+        authenticate { auth.verifyEmail(email, code) }
+    }
+
+    fun resendVerification() {
+        val email = _verificationEmail.value ?: return
+        viewModelScope.launch {
+            _authBusy.value = true
+            val result = auth.resendVerification(email)
+            _authBusy.value = false
+            _authError.value = result.error
+        }
+    }
+
+    fun cancelVerification() { _verificationEmail.value = null; _authError.value = null }
 
     fun searchUsers(query: String) {
         if (query.length < 2) { _userResults.value = emptyList(); return }
@@ -326,6 +383,58 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun logout() { auth.logout(); _session.value = null; _userResults.value = emptyList() }
-    fun dismissUpdate() { _update.value = null }
-    fun checkForUpdates() { viewModelScope.launch { _update.value = updater.check() } }
+    fun updateDisplayName(name: String) {
+        viewModelScope.launch {
+            val result = auth.updateDisplayName(name)
+            if (result.session != null) _session.value = result.session else _authError.value = result.error
+        }
+    }
+    fun updateProfilePicture(uri: Uri) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                runCatching {
+                    val bitmap = getApplication<Application>().contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+                        ?: error("Could not read image")
+                    val longest = maxOf(bitmap.width, bitmap.height)
+                    val scaled = if (longest > 1024) {
+                        val ratio = 1024f / longest
+                        Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+                    } else bitmap
+                    val output = ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 84, output)
+                    if (scaled !== bitmap) scaled.recycle()
+                    bitmap.recycle()
+                    output.toByteArray()
+                }.fold(onSuccess = { auth.updateAvatar(it) }, onFailure = { AuthResult(error = it.message) })
+            }
+            if (result.session != null) _session.value = result.session else _authError.value = result.error
+        }
+    }
+
+    fun isChatLocked(conversationId: String) = chatLocks.contains(conversationId)
+    fun verifyChatPasscode(conversationId: String, passcode: String): Boolean {
+        val stored = chatLocks.getString(conversationId, null)?.split(':') ?: return true
+        if (stored.size != 2) return false
+        return passcodeHash(conversationId, passcode, stored[0]) == stored[1]
+    }
+    fun setChatPasscode(conversationId: String, passcode: String?) {
+        if (passcode.isNullOrBlank()) chatLocks.edit().remove(conversationId).apply()
+        else {
+            val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+            chatLocks.edit().putString(conversationId, "$salt:${passcodeHash(conversationId, passcode, salt)}").apply()
+        }
+    }
+    private fun passcodeHash(conversationId: String, passcode: String, salt: String) =
+        MessageDigest.getInstance("SHA-256").digest("$conversationId:$salt:$passcode".toByteArray()).joinToString("") { "%02x".format(it) }
+    fun dismissUpdate() { _showUpdatePopup.value = false }
+    fun checkForUpdates() { viewModelScope.launch { refreshUpdate(showPopup = false) } }
+    fun installUpdate(activity: Activity) { _update.value?.let { updater.downloadAndInstall(activity, it) } }
+
+    private suspend fun refreshUpdate(showPopup: Boolean) {
+        _updateStatus.value = "Checking for updates…"
+        val found = updater.check()
+        _update.value = found
+        _updateStatus.value = found?.let { "Version ${it.versionName} is available" } ?: "Mowell is up to date"
+        if (showPopup && found != null) _showUpdatePopup.value = true
+    }
 }

@@ -22,9 +22,9 @@
     <application
         android:name=".MowellApplication"
         android:allowBackup="false"
-        android:icon="@drawable/ic_mowell"
+        android:icon="@drawable/mowell_logo"
         android:label="Mowell"
-        android:roundIcon="@drawable/ic_mowell"
+        android:roundIcon="@drawable/mowell_logo"
         tools:replace="android:label,android:allowBackup"
         android:supportsRtl="true"
         android:theme="@style/Theme.Mowell">
@@ -42,6 +42,7 @@
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="false"
             android:screenOrientation="fullSensor" />
+        <receiver android:name=".network.NotificationActionReceiver" android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

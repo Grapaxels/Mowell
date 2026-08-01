@@ -34,6 +34,7 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("avatarUrl", conversation.avatarUrl)
             put("lastSeenAt", conversation.lastSeenAt)
             put("members", conversation.members)
+            put("unreadCount", conversation.unreadCount)
         }
         db().insertWithOnConflict("conversations", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         conversations.value = loadConversations()
@@ -56,6 +57,23 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         }
         db().insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         refreshMessages(message.conversationId)
+    }
+
+    suspend fun hasMessage(id: String): Boolean = withContext(Dispatchers.IO) {
+        db().rawQuery("SELECT 1 FROM messages WHERE id = ? LIMIT 1", arrayOf(id)).use { it.moveToFirst() }
+    }
+
+    suspend fun incrementUnread(conversationId: String): Int = withContext(Dispatchers.IO) {
+        db().execSQL("UPDATE conversations SET unreadCount = unreadCount + 1 WHERE id = ?", arrayOf(conversationId))
+        conversations.value = loadConversations()
+        conversations.value.sumOf { it.unreadCount }
+    }
+
+    suspend fun markRead(conversationId: String): Int = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply { put("unreadCount", 0) }
+        db().update("conversations", values, "id = ?", arrayOf(conversationId))
+        conversations.value = loadConversations()
+        conversations.value.sumOf { it.unreadCount }
     }
 
     suspend fun updateDelivery(id: String, delivery: String, route: String) = withContext(Dispatchers.IO) {
@@ -111,7 +129,8 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
                 cursor.getString(cursor.getColumnIndexOrThrow("username")),
                 cursor.getString(cursor.getColumnIndexOrThrow("avatarUrl")),
                 cursor.getLong(cursor.getColumnIndexOrThrow("lastSeenAt")),
-                cursor.getString(cursor.getColumnIndexOrThrow("members"))
+                cursor.getString(cursor.getColumnIndexOrThrow("members")),
+                cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount"))
             ))
         }
     }

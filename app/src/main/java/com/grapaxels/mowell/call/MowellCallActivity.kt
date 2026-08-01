@@ -1,6 +1,7 @@
 package com.grapaxels.mowell.call
 
 import android.Manifest
+import android.app.NotificationManager
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
@@ -44,6 +45,9 @@ class MowellCallActivity : ComponentActivity() {
             return
         }
         current = WeakReference(this)
+        intent.getIntExtra("notification_id", 0).takeIf { it != 0 }?.let {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(it)
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
@@ -92,8 +96,11 @@ class MowellCallActivity : ComponentActivity() {
             .put("conversation", conversation)
             .put("room", room)
             .put("name", intent.getStringExtra("name") ?: "Mowell call")
+            .put("avatar", intent.getStringExtra("avatar"))
+            .put("userId", AuthRepository(this).savedSession?.user?.id.orEmpty())
             .put("video", intent.getBooleanExtra("video", false))
             .put("initiator", intent.getBooleanExtra("initiator", false))
+            .put("group", intent.getBooleanExtra("group", false))
         val html = assets.open("mowell_call.html").bufferedReader().use { it.readText() }
             .replace("__MOWELL_CONFIG__", config.toString().replace("</", "<\\/"))
         webView.loadDataWithBaseURL("https://mowell-api.grapaxels.in/", html, "text/html", "UTF-8", null)

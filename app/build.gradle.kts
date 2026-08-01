@@ -12,8 +12,9 @@ android {
         applicationId = "com.grapaxels.mowell"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.0.0"
+        versionCode = 7
+        versionName = "1.1.0"
+        buildConfigField("boolean", "SELF_UPDATE", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -26,6 +27,7 @@ android {
             // Android Gradle zip transformer is unreliable on Windows/JDK zipfs.
             isShrinkResources = false
             isDebuggable = false
+            buildConfigField("boolean", "SELF_UPDATE", "false")
             val releaseStore = System.getenv("MOWELL_KEYSTORE")
             if (!releaseStore.isNullOrBlank()) {
                 signingConfig = signingConfigs.create("mowellRelease") {
@@ -37,6 +39,11 @@ android {
             }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        create("direct") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -45,6 +52,7 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 }
