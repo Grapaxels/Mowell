@@ -5,7 +5,6 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
@@ -22,11 +21,11 @@
 
     <application
         android:name=".MowellApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_mowell"
         android:label="Mowell"
         android:roundIcon="@drawable/ic_mowell"
-        tools:replace="android:label"
+        tools:replace="android:label,android:allowBackup"
         android:supportsRtl="true"
         android:theme="@style/Theme.Mowell">
         <activity
@@ -38,6 +37,11 @@
             </intent-filter>
         </activity>
         <activity android:name=".MowellMapActivity" android:exported="false" />
+        <activity
+            android:name=".call.MowellCallActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:exported="false"
+            android:screenOrientation="fullSensor" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

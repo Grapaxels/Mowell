@@ -6,7 +6,7 @@ import { OAuth2Client } from "google-auth-library";
 import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import { Conversation, Media, Message, User } from "./models/index.js";
+import { CallSignal, Conversation, Media, Message, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -181,6 +181,37 @@ app.get("/v1/attachments/:id", auth, async (req, res) => {
   res.set("Content-Length", String(media.size));
   res.set("Content-Disposition", `inline; filename="${safeName}"`);
   res.send(media.data);
+});
+
+// Ephemeral WebRTC signaling. Audio and video never pass through this API.
+app.post("/v1/calls/:room/signals", auth, async (req, res) => {
+  try {
+    const room = String(req.params.room || "").trim();
+    const conversationId = String(req.body.conversationId || "");
+    const type = String(req.body.type || "");
+    if (!/^[A-Za-z0-9-]{8,100}$/.test(room)) return res.status(400).json({ error: "Invalid call room" });
+    if (!["offer", "answer", "ice", "hangup"].includes(type)) return res.status(400).json({ error: "Invalid call signal" });
+    const allowed = await Conversation.exists({ _id: conversationId, members: req.auth.sub });
+    if (!allowed) return res.sendStatus(404);
+    const signal = await CallSignal.create({ room, conversation: conversationId, sender: req.auth.sub, type, payload: req.body.payload || {} });
+    res.status(201).json({ id: signal._id.toString() });
+  } catch { res.status(400).json({ error: "Could not send call signal" }); }
+});
+
+app.get("/v1/calls/:room/signals", auth, async (req, res) => {
+  try {
+    const room = String(req.params.room || "").trim();
+    const conversationId = String(req.query.conversationId || "");
+    const allowed = await Conversation.exists({ _id: conversationId, members: req.auth.sub });
+    if (!allowed) return res.sendStatus(404);
+    const filter = { room, conversation: conversationId, sender: { $ne: req.auth.sub } };
+    if (req.query.afterId) {
+      if (!mongoose.isValidObjectId(req.query.afterId)) return res.status(400).json({ error: "Invalid call cursor" });
+      filter._id = { $gt: new mongoose.Types.ObjectId(String(req.query.afterId)) };
+    }
+    const signals = await CallSignal.find(filter).sort({ _id: 1 }).limit(100).lean();
+    res.json({ signals: signals.map((s) => ({ id: s._id.toString(), type: s.type, payload: s.payload })) });
+  } catch { res.status(400).json({ error: "Could not receive call signals" }); }
 });
 
 export default app;

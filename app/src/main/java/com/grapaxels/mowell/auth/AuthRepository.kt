@@ -38,8 +38,8 @@ class AuthRepository(context: Context) {
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     var serverUrl: String
-        get() = prefs.getString("server_url", "https://mowell-api.grapaxels.in")!!.trimEnd('/')
-        set(value) { prefs.edit().putString("server_url", value.trim().trimEnd('/')).apply() }
+        get() = "https://mowell-api.grapaxels.in"
+        set(@Suppress("UNUSED_PARAMETER") value) { }
 
     var googleClientId: String
         get() = prefs.getString("google_client_id", "")!!

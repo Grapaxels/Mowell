@@ -45,3 +45,15 @@ const mediaSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 export const Media = mongoose.model("Media", mediaSchema);
+
+const callSignalSchema = new mongoose.Schema({
+  room: { type: String, required: true, index: true, maxlength: 100 },
+  conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
+  sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  type: { type: String, enum: ["offer", "answer", "ice", "hangup"], required: true },
+  payload: { type: mongoose.Schema.Types.Mixed, default: {} },
+  expiresAt: { type: Date, default: () => new Date(Date.now() + 60 * 60 * 1000), expires: 0 }
+}, { timestamps: true });
+callSignalSchema.index({ room: 1, conversation: 1, _id: 1 });
+
+export const CallSignal = mongoose.model("CallSignal", callSignalSchema);

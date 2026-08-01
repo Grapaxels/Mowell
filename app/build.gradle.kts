@@ -12,8 +12,8 @@ android {
         applicationId = "com.grapaxels.mowell"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -21,7 +21,20 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            // R8 removes unused code. Resource shrinking is disabled because the
+            // Android Gradle zip transformer is unreliable on Windows/JDK zipfs.
+            isShrinkResources = false
+            isDebuggable = false
+            val releaseStore = System.getenv("MOWELL_KEYSTORE")
+            if (!releaseStore.isNullOrBlank()) {
+                signingConfig = signingConfigs.create("mowellRelease") {
+                    storeFile = file(releaseStore)
+                    storePassword = System.getenv("MOWELL_STORE_PASSWORD")
+                    keyAlias = System.getenv("MOWELL_KEY_ALIAS") ?: "mowell-upload"
+                    keyPassword = System.getenv("MOWELL_KEY_PASSWORD")
+                }
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -62,5 +75,4 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.android.gms:play-services-auth:21.2.0")
-    implementation("org.jitsi.react:jitsi-meet-sdk:10.3.0") { isTransitive = true }
 }

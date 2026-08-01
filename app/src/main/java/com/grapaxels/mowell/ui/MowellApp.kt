@@ -133,7 +133,6 @@ private enum class Page { CHATS, PEOPLE, CALLS, NEARBY, YOU }
 fun MowellApp(vm: MowellViewModel) {
     val scheme = androidx.compose.material3.lightColorScheme(primary = Violet, secondary = Lime, background = Canvas, surface = ClayWhite, onPrimary = Color.White, onBackground = Ink)
     val session by vm.session.collectAsStateWithLifecycle()
-    val update by vm.update.collectAsStateWithLifecycle()
     var splash by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { delay(1_500); splash = false }
 
@@ -144,17 +143,6 @@ fun MowellApp(vm: MowellViewModel) {
                 session == null -> AuthScreen(vm)
                 else -> MainExperience(vm)
             }
-        }
-        if (!splash && session != null && update != null) {
-            val activity = LocalContext.current as? Activity
-            AlertDialog(
-                onDismissRequest = { if (!update!!.required) vm.dismissUpdate() },
-                icon = { Icon(Icons.Rounded.CloudDownload, null, tint = Violet) },
-                title = { Text("A fresh Mowell is ready", fontWeight = FontWeight.Bold) },
-                text = { Text("Version ${update!!.versionName} can be downloaded here. Android will ask once before replacing the app; your login and SQLite chats stay on the phone.") },
-                confirmButton = { Button(onClick = { activity?.let { vm.updater.downloadAndInstall(it, update!!) } }, colors = ButtonDefaults.buttonColors(containerColor = Violet)) { Text("Update now") } },
-                dismissButton = { if (!update!!.required) OutlinedButton(onClick = vm::dismissUpdate) { Text("Later") } }
-            )
         }
     }
 }
@@ -183,15 +171,6 @@ private fun AuthScreen(vm: MowellViewModel) {
     var username by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var serverUrl by remember { mutableStateOf(vm.auth.serverUrl) }
-    var googleClientId by remember { mutableStateOf(vm.auth.googleClientId) }
-    var advanced by remember { mutableStateOf(vm.auth.serverUrl.contains("example.invalid")) }
-    var googleNotice by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val googleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        runCatching { GoogleSignIn.getSignedInAccountFromIntent(result.data).getResult(ApiException::class.java).idToken }
-            .getOrNull()?.let(vm::googleLogin)
-    }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp), verticalArrangement = Arrangement.Center) {
         item {
@@ -218,35 +197,8 @@ private fun AuthScreen(vm: MowellViewModel) {
                     shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Ink)
                 ) { if (busy) CircularProgressIndicator(Modifier.size(21.dp), color = Lime, strokeWidth = 2.dp) else Text(if (register) "Create Mowell account" else "Enter Mowell", fontWeight = FontWeight.Bold) }
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(onClick = {
-                    if (googleClientId.isBlank()) googleNotice = true
-                    else {
-                        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).requestIdToken(googleClientId).requestEmail().build()
-                        googleLauncher.launch(GoogleSignIn.getClient(context, options).signInIntent)
-                    }
-                }, Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(20.dp)) { Text("G  Continue with Google", fontWeight = FontWeight.SemiBold) }
                 TextButtonLine(if (register) "Already a member? Sign in" else "New here? Create an account") { register = !register }
             }
-            Spacer(Modifier.height(14.dp))
-            ClayCard(ClayWhite) {
-                TextButtonLine(if (advanced) "Hide server setup" else "Server setup") { advanced = !advanced }
-                AnimatedVisibility(advanced) {
-                    Column {
-                        Text("Central MongoDB API URL", fontSize = 12.sp, color = Muted)
-                        ClayField(serverUrl, { serverUrl = it }, "https://api.yourdomain.com")
-                        Text("Google web client ID", fontSize = 12.sp, color = Muted)
-                        ClayField(googleClientId, { googleClientId = it }, "…apps.googleusercontent.com")
-                        OutlinedButton(onClick = { vm.setServerUrl(serverUrl); vm.auth.googleClientId = googleClientId }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) { Text("Save connection") }
-                    }
-                }
-            }
-            if (googleNotice) AlertDialog(
-                onDismissRequest = { googleNotice = false },
-                title = { Text("Google configuration") },
-                text = { Text("Add the same Google web client ID in Server setup and in GOOGLE_CLIENT_ID on the backend. Mowell will then open Google sign-in and send the verified ID token to your server.") },
-                confirmButton = { Button(onClick = { googleNotice = false }) { Text("Got it") } }
-            )
         }
     }
 }
@@ -397,25 +349,12 @@ private fun NearbyScreen(vm: MowellViewModel, modifier: Modifier) {
 @Composable
 private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
     val session by vm.session.collectAsStateWithLifecycle()
-    var server by remember { mutableStateOf(vm.auth.serverUrl) }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Text("You", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("Identity, connection and updates.", color = Muted) }
+        item { Text("You", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("Identity and privacy.", color = Muted) }
         item {
             ClayCard(Lavender) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Avatar(session?.user?.displayName ?: "M", 62.dp, Violet); Spacer(Modifier.width(13.dp)); Column { Text(session?.user?.displayName ?: "Mowell user", fontWeight = FontWeight.Black, fontSize = 20.sp); Text("@${session?.user?.username}", color = Violet); Text(session?.user?.email.orEmpty(), color = Muted, fontSize = 12.sp) } }
                 Spacer(Modifier.height(12.dp)); Text("You stay signed in on this phone until you use Log out below.", fontSize = 12.sp, color = Muted)
-            }
-        }
-        item {
-            ClayCard(ClayWhite) {
-                Text("Central service", fontWeight = FontWeight.Bold)
-                ClayField(server, { server = it }, "https://api.yourdomain.com")
-                Button(onClick = { vm.setServerUrl(server) }, shape = RoundedCornerShape(17.dp), colors = ButtonDefaults.buttonColors(containerColor = Ink)) { Text("Save server") }
-            }
-        }
-        item {
-            ClayCard(ClayWhite) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Rounded.CloudDownload, null, tint = Violet); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("App updates", fontWeight = FontWeight.Bold); Text("Download new APKs inside Mowell", color = Muted, fontSize = 12.sp) }; OutlinedButton(onClick = vm::checkForUpdates, shape = RoundedCornerShape(16.dp)) { Text("Check") } }
             }
         }
         item { OutlinedButton(onClick = vm::logout, Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(20.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB3261E))) { Icon(Icons.Rounded.Logout, null); Spacer(Modifier.width(8.dp)); Text("Log out on this phone", fontWeight = FontWeight.Bold) } }

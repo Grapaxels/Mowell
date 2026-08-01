@@ -49,7 +49,14 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.core.content.FileProvider
 
-data class CallSession(val conversationId: String, val name: String, val room: String, val video: Boolean, val group: Boolean = false)
+data class CallSession(
+    val conversationId: String,
+    val name: String,
+    val room: String,
+    val video: Boolean,
+    val group: Boolean = false,
+    val initiator: Boolean = false
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -201,7 +208,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         val room = "Mowell-${UUID.randomUUID().toString().replace("-", "")}"
         val group = conversations.value.find { it.id == conversationId }?.isGroup ?: false
         sendTyped(conversationId, JSONObject().put("room", room).put("video", video).put("group", group).toString(), "call")
-        return CallSession(conversationId, name, room, video, group)
+        return CallSession(conversationId, name, room, video, group, initiator = true)
     }
 
     fun launchCall(context: Context, session: CallSession) = CallCoordinator.launch(context, session)
