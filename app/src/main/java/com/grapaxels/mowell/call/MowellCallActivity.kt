@@ -26,6 +26,9 @@ import java.lang.ref.WeakReference
 class MowellCallActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var room: String
+    private lateinit var conversationId: String
+    private lateinit var authToken: String
+    private var callPageLoaded = false
 
     companion object {
         private var current = WeakReference<MowellCallActivity>(null)
@@ -40,12 +43,13 @@ class MowellCallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         room = intent.getStringExtra("room").orEmpty()
-        val conversation = intent.getStringExtra("conversation").orEmpty()
+        conversationId = intent.getStringExtra("conversation").orEmpty()
         val auth = AuthRepository(this).savedSession
-        if (room.isBlank() || conversation.isBlank() || auth == null) {
+        if (room.isBlank() || conversationId.isBlank() || auth == null) {
             finish()
             return
         }
+        authToken = auth.token
         current = WeakReference(this)
         intent.getIntExtra("notification_id", 0).takeIf { it != 0 }?.let {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(it)
@@ -87,11 +91,24 @@ class MowellCallActivity : ComponentActivity() {
         val permissions = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
         if (permissions.any { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
             ActivityCompat.requestPermissions(this, permissions, 701)
+        } else loadCallPage(authToken, conversationId)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 701) return
+        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+            loadCallPage(authToken, conversationId)
+        } else {
+            AlertDialog.Builder(this).setTitle("Camera and microphone required")
+                .setMessage("Allow camera and microphone access to use Mowell calls.")
+                .setPositiveButton("Close") { _, _ -> finish() }.setOnCancelListener { finish() }.show()
         }
-        loadCallPage(auth.token, conversation)
     }
 
     private fun loadCallPage(token: String, conversation: String) {
+        if (callPageLoaded) return
+        callPageLoaded = true
         val config = JSONObject()
             .put("api", AuthRepository(this).serverUrl)
             .put("token", token)

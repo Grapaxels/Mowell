@@ -17,6 +17,10 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
     fun observeMessages(conversationId: String): Flow<List<MessageEntity>> =
         messageFlows.getOrPut(conversationId) { MutableStateFlow(loadMessages(conversationId)) }
 
+    suspend fun getConversation(id: String): ConversationEntity? = withContext(Dispatchers.IO) {
+        loadConversations().find { it.id == id }
+    }
+
     suspend fun latestMessageTime(conversationId: String): Long = withContext(Dispatchers.IO) {
         db().rawQuery("SELECT COALESCE(MAX(sentAt), 0) FROM messages WHERE conversationId = ?", arrayOf(conversationId)).use {
             if (it.moveToFirst()) it.getLong(0) else 0L
@@ -35,6 +39,8 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("lastSeenAt", conversation.lastSeenAt)
             put("members", conversation.members)
             put("unreadCount", conversation.unreadCount)
+            put("blocked", if (conversation.blocked) 1 else 0)
+            put("blockedByMe", if (conversation.blockedByMe) 1 else 0)
         }
         db().insertWithOnConflict("conversations", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         conversations.value = loadConversations()
@@ -121,6 +127,30 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         }
     }
 
+    suspend fun retainSyncedConversations(ids: Set<String>) = withContext(Dispatchers.IO) {
+        val database = db()
+        if (ids.isEmpty()) {
+            database.delete("conversations", "id != ?", arrayOf("general"))
+        } else {
+            val placeholders = ids.joinToString(",") { "?" }
+            database.delete("conversations", "id != ? AND id NOT IN ($placeholders)", arrayOf("general", *ids.toTypedArray()))
+        }
+        conversations.value = loadConversations()
+    }
+
+    suspend fun clearAccountData() = withContext(Dispatchers.IO) {
+        val database = db()
+        database.beginTransaction()
+        try {
+            database.delete("messages", null, null)
+            database.delete("conversations", null, null)
+            database.delete("cached_users", null, null)
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
+        messageFlows.values.forEach { it.value = emptyList() }
+        conversations.value = emptyList()
+    }
+
     private fun refreshMessages(conversationId: String) {
         messageFlows.getOrPut(conversationId) { MutableStateFlow(emptyList()) }.value = loadMessages(conversationId)
     }
@@ -139,7 +169,9 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
                 cursor.getString(cursor.getColumnIndexOrThrow("avatarUrl")),
                 cursor.getLong(cursor.getColumnIndexOrThrow("lastSeenAt")),
                 cursor.getString(cursor.getColumnIndexOrThrow("members")),
-                cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount"))
+                cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount")),
+                cursor.getInt(cursor.getColumnIndexOrThrow("blocked")) == 1,
+                cursor.getInt(cursor.getColumnIndexOrThrow("blockedByMe")) == 1
             ))
         }
     }

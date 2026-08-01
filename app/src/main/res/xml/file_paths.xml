@@ -3,4 +3,5 @@
     <external-files-path name="updates" path="Download/" />
     <cache-path name="shared_media" path="mowell_media/" />
     <cache-path name="camera" path="camera/" />
+    <cache-path name="voice" path="voice/" />
 </paths>

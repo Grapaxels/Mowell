@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
+import android.provider.Settings
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.ChatBubble
@@ -381,11 +383,14 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
         }
         if (peopleQuery.length >= 2) {
             items(users, key = { "person-${it.id}" }) { user ->
-                ClayCard(ClayWhite, Modifier.clickable { vm.startChat(user) { open(it) } }) {
+                val existing = conversations.find { it.username.equals(user.username, ignoreCase = true) }
+                ClayCard(ClayWhite) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
-                        Box(Modifier.clip(RoundedCornerShape(14.dp)).background(Lime).padding(10.dp)) { Icon(Icons.Rounded.ChatBubble, "Start chat", Modifier.size(20.dp)) }
+                        Button(onClick = { if (existing != null) open(existing.id) else vm.addUser(user) }, shape = RoundedCornerShape(14.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp)) {
+                            Icon(if (existing == null) Icons.Rounded.Add else Icons.Rounded.ChatBubble, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(if (existing == null) "Add" else "Chat")
+                        }
                     }
                 }
             }
@@ -417,6 +422,7 @@ private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Un
 @Composable
 private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserProfile) -> Unit) {
     val users by vm.userResults.collectAsStateWithLifecycle()
+    val conversations by vm.conversations.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -426,11 +432,14 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
             ClayField(query, { query = it.lowercase(); vm.searchUsers(it) }, "Search username", leading = Icons.Rounded.Search)
         }
         items(users, key = { it.id }) { user ->
-            ClayCard(ClayWhite, Modifier.clickable { onUser(user) }) {
+            val existing = conversations.find { it.username.equals(user.username, ignoreCase = true) }
+            ClayCard(ClayWhite) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
-                    Box(Modifier.clip(RoundedCornerShape(14.dp)).background(Lime).padding(10.dp)) { Icon(Icons.Rounded.ChatBubble, "Chat", Modifier.size(20.dp)) }
+                    Button(onClick = { if (existing != null) onUser(user) else vm.addUser(user) }, shape = RoundedCornerShape(14.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp)) {
+                        Icon(if (existing == null) Icons.Rounded.Add else Icons.Rounded.ChatBubble, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(if (existing == null) "Add" else "Chat")
+                    }
                 }
             }
         }
@@ -528,7 +537,12 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
                 }
                 OutlinedButton(onClick = { messageSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_NOTIFICATION, "Choose message sound")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming message sound") }
                 OutlinedButton(onClick = { callSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_RINGTONE, "Choose call ringtone")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming call ringtone") }
-                Text("Defaults are active immediately: your phone's notification tone for messages, ringtone for calls, a short sent-message confirmation, and a busy-call tone. You can change message, call, and per-person sounds here later.", color = Muted, fontSize = 11.sp)
+                OutlinedButton(onClick = {
+                    val intent = if (android.os.Build.VERSION.SDK_INT >= 26) Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
+                    context.startActivity(intent)
+                }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Open Android notification settings") }
+                Text("Mowell keeps a lightweight message connection active so new chats can alert you with sound even when the app is not open. Android may show a small ongoing status notification for this connection.", color = Muted, fontSize = 11.sp)
             }
         }
         item {
@@ -594,6 +608,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     val messages by vm.messages(conversationId).collectAsStateWithLifecycle(initialValue = emptyList())
     val conversation = vm.conversations.collectAsStateWithLifecycle().value.find { it.id == conversationId }
     val typingState by vm.typingUsers.collectAsStateWithLifecycle()
+    val voiceRecording by vm.voiceRecording.collectAsStateWithLifecycle()
     val typing = typingState[conversationId].orEmpty()
     val endedRooms = messages.filter { it.kind == "call_end" }.mapNotNull { runCatching { JSONObject(it.body).optString("room") }.getOrNull() }.toSet()
     var text by remember { mutableStateOf("") }
@@ -610,6 +625,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     var searchOpen by remember { mutableStateOf(false) }
     var chatQuery by remember { mutableStateOf("") }
     var headerMenu by remember { mutableStateOf(false) }
+    var confirmBlock by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -652,6 +668,15 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             confirmButton = { Button(enabled = newCode.length >= 4, onClick = { vm.setChatPasscode(conversationId, newCode); hasLock = true; settingLock = false }) { Text("Lock") } },
             dismissButton = { OutlinedButton(onClick = { settingLock = false }) { Text("Cancel") } })
     }
+    if (confirmBlock) {
+        AlertDialog(
+            onDismissRequest = { confirmBlock = false },
+            title = { Text("Block ${conversation?.title ?: "this user"}?") },
+            text = { Text("Neither person will be able to send messages or start calls until you unblock this contact.") },
+            confirmButton = { Button(onClick = { vm.setUserBlocked(conversationId, true); confirmBlock = false }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E))) { Text("Block") } },
+            dismissButton = { OutlinedButton(onClick = { confirmBlock = false }) { Text("Cancel") } }
+        )
+    }
     deleteTarget?.let { target ->
         val canDeleteEveryone = target.outgoing && target.kind == "text" && System.currentTimeMillis() - target.sentAt <= 4 * 60 * 1000
         AlertDialog(
@@ -671,7 +696,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
         vm.markConversationRead(conversationId)
         while (true) { vm.syncConversation(conversationId); vm.refreshTyping(conversationId); delay(1_000) }
     }
-    DisposableEffect(conversationId) { onDispose { vm.updateTyping(conversationId, false) } }
+    DisposableEffect(conversationId) { onDispose { vm.updateTyping(conversationId, false); vm.stopVoiceRecording(conversationId, false) } }
     LaunchedEffect(displayedMessages.size, typing, chatQuery) {
         val target = if (chatQuery.isBlank() && typing.isNotEmpty()) displayedMessages.size else displayedMessages.lastIndex
         if (target >= 0) listState.scrollToItem(target)
@@ -690,8 +715,8 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                             if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(vm.networkLabel(), color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
-                    IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
+                    IconButton(enabled = conversation?.blocked != true, onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = if (conversation?.blocked == true) Muted else Violet) }
+                    IconButton(enabled = conversation?.blocked != true, onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = if (conversation?.blocked == true) Muted else Violet) }
                     Box {
                         IconButton(onClick = { headerMenu = true }) { Icon(Icons.Rounded.MoreVert, "More", tint = Violet) }
                         DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }) {
@@ -706,6 +731,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                                 onClick = {
                                     headerMenu = false
                                     if (hasLock) { vm.setChatPasscode(conversationId, null); hasLock = false } else settingLock = true
+                                }
+                            )
+                            if (conversation?.isGroup == false) DropdownMenuItem(
+                                text = { Text(if (conversation.blockedByMe) "Unblock user" else "Block user") },
+                                leadingIcon = { Icon(Icons.Rounded.Block, null) },
+                                onClick = {
+                                    headerMenu = false
+                                    if (conversation.blockedByMe) vm.setUserBlocked(conversationId, false) else confirmBlock = true
                                 }
                             )
                         }
@@ -733,9 +766,15 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         IconButton(onClick = { replyTo = null }) { Text("×", fontSize = 25.sp) }
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
+                if (conversation?.blocked == true) {
+                    Row(Modifier.fillMaxWidth().background(Peach).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Block, null, tint = Color(0xFFB3261E)); Spacer(Modifier.width(9.dp))
+                        Text("Messaging and calling are unavailable for this blocked contact.", Modifier.weight(1f), color = Ink, fontSize = 13.sp)
+                        if (conversation.blockedByMe) OutlinedButton(onClick = { vm.setUserBlocked(conversationId, false) }) { Text("Unblock") }
+                    }
+                } else Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
                 Box {
-                    IconButton(onClick = { attachments = true }) { Icon(Icons.Rounded.AttachFile, "Share", tint = Violet) }
+                    IconButton(enabled = !voiceRecording, onClick = { attachments = true }) { Icon(Icons.Rounded.AttachFile, "Share", tint = if (voiceRecording) Muted else Violet) }
                     DropdownMenu(expanded = attachments, onDismissRequest = { attachments = false }) {
                         DropdownMenuItem(text = { Text("Camera") }, leadingIcon = { Icon(Icons.Rounded.PhotoCamera, null) }, onClick = {
                             attachments = false
@@ -750,8 +789,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Rounded.ContactPhone, null) }, onClick = { attachments = false; contactPicker.launch(null) })
                     }
                 }
-                TextField(value = text, onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) }, placeholder = { Text("Write something…") }, modifier = Modifier.weight(1f).heightIn(min = 54.dp, max = 132.dp).shadow(6.dp, RoundedCornerShape(22.dp)), minLines = 1, maxLines = 5, shape = RoundedCornerShape(22.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
-                Spacer(Modifier.width(8.dp)); IconButton(onClick = send, Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(Lime)) { Icon(Icons.Rounded.Send, "Send", tint = Ink) }
+                TextField(value = text, enabled = !voiceRecording, onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) }, placeholder = { Text(if (voiceRecording) "Recording… tap the mic to send" else "Write something…") }, modifier = Modifier.weight(1f).heightIn(min = 54.dp, max = 132.dp).shadow(6.dp, RoundedCornerShape(22.dp)), minLines = 1, maxLines = 5, shape = RoundedCornerShape(22.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, disabledContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
+                Spacer(Modifier.width(8.dp)); IconButton(
+                    onClick = {
+                        if (text.isNotBlank()) send()
+                        else if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId)
+                    },
+                    modifier = Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(if (voiceRecording) Color(0xFFFFC7CB) else Lime)
+                ) { Icon(if (text.isNotBlank()) Icons.Rounded.Send else Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else if (text.isNotBlank()) "Send" else "Record voice message", tint = if (voiceRecording) Color(0xFFB3261E) else Ink) }
                 }
             }
         },

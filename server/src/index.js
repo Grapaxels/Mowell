@@ -9,7 +9,7 @@ import mongoose from "mongoose";
 import nodemailer from "nodemailer";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
-import { CallRoom, CallSignal, Conversation, Media, Message, TypingState, User } from "./models/index.js";
+import { CallRoom, CallSignal, Contact, Conversation, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -33,6 +33,12 @@ const issueToken = (user) => jwt.sign({ sub: user._id.toString(), username: user
 const usernamePattern = /^[a-z0-9_]{3,24}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const contactPair = (first, second) => [String(first), String(second)].sort().join(":");
+const directContact = async (conversation) => {
+  if (!conversation || conversation.isGroup || conversation.members.length !== 2) return null;
+  return Contact.findOne({ pairKey: contactPair(conversation.members[0], conversation.members[1]) });
+};
+const directMessagingBlocked = async (conversation) => Boolean((await directContact(conversation))?.blockedBy?.length);
 const disposableDomains = new Set([
   "10minutemail.com", "guerrillamail.com", "guerrillamailblock.com", "mailinator.com", "temp-mail.org",
   "tempmail.com", "throwawaymail.com", "yopmail.com", "sharklasers.com", "getnada.com", "dispostable.com",
@@ -313,8 +319,19 @@ app.get("/v1/users/search", auth, async (req, res) => {
 });
 
 app.get("/v1/conversations", auth, async (req, res) => {
+  const contacts = await Contact.find({ users: req.auth.sub }).lean();
+  const contactByPair = new Map(contacts.map((contact) => [contact.pairKey, contact]));
   const conversations = await Conversation.find({ members: req.auth.sub }).populate("members", "username displayName avatarUrl lastSeenAt").sort({ lastMessageAt: -1 }).limit(100);
-  res.json({ conversations });
+  const visible = conversations.flatMap((conversation) => {
+    if (conversation.isGroup) return [conversation.toObject()];
+    const ids = conversation.members.map((member) => String(member?._id || member));
+    if (ids.length !== 2) return [];
+    const contact = contactByPair.get(contactPair(ids[0], ids[1]));
+    if (!contact) return [];
+    const blockedBy = (contact.blockedBy || []).map(String);
+    return [{ ...conversation.toObject(), blocked: blockedBy.length > 0, blockedByMe: blockedBy.includes(req.auth.sub) }];
+  });
+  res.json({ conversations: visible });
 });
 
 app.post("/v1/conversations", auth, async (req, res) => {
@@ -324,11 +341,42 @@ app.post("/v1/conversations", auth, async (req, res) => {
   if (validCount !== memberIds.length) return res.status(400).json({ error: "One or more users do not exist" });
   const isGroup = memberIds.length > 2 || Boolean(req.body.isGroup);
   if (!isGroup) {
+    const pairKey = contactPair(memberIds[0], memberIds[1]);
+    await Contact.updateOne(
+      { pairKey },
+      { $setOnInsert: { pairKey, users: memberIds, addedBy: req.auth.sub, blockedBy: [] } },
+      { upsert: true }
+    );
     const existing = await Conversation.findOne({ isGroup: false, members: { $all: memberIds, $size: 2 } });
     if (existing) return res.json({ conversation: existing });
   }
   const conversation = await Conversation.create({ title: req.body.title, isGroup, members: memberIds, createdBy: req.auth.sub });
   res.status(201).json({ conversation });
+});
+
+app.post("/v1/conversations/:id/block", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub, isGroup: false });
+  if (!conversation || conversation.members.length !== 2) return res.sendStatus(404);
+  const pairKey = contactPair(conversation.members[0], conversation.members[1]);
+  const contact = await Contact.findOneAndUpdate(
+    { pairKey },
+    {
+      $setOnInsert: { pairKey, users: conversation.members, addedBy: req.auth.sub },
+      $addToSet: { blockedBy: req.auth.sub }
+    },
+    { upsert: true, new: true }
+  );
+  await TypingState.deleteMany({ conversation: conversation._id });
+  res.json({ ok: true, blocked: true, blockedByMe: true, blockedBy: contact.blockedBy.length });
+});
+
+app.delete("/v1/conversations/:id/block", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub, isGroup: false });
+  if (!conversation || conversation.members.length !== 2) return res.sendStatus(404);
+  const pairKey = contactPair(conversation.members[0], conversation.members[1]);
+  const contact = await Contact.findOneAndUpdate({ pairKey }, { $pull: { blockedBy: req.auth.sub } }, { new: true });
+  const blockedBy = contact?.blockedBy || [];
+  res.json({ ok: true, blocked: blockedBy.length > 0, blockedByMe: blockedBy.some((id) => String(id) === req.auth.sub) });
 });
 
 app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
@@ -346,6 +394,7 @@ app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
 app.post("/v1/conversations/:id/messages", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
   if (!conversation) return res.sendStatus(404);
+  if (await directMessagingBlocked(conversation)) return res.status(403).json({ error: "Messaging is unavailable because this contact is blocked" });
   const body = String(req.body.body || "").trim();
   const clientId = String(req.body.clientId || "").trim();
   if (!body || !clientId) return res.status(400).json({ error: "clientId and body are required" });
@@ -379,6 +428,7 @@ app.delete("/v1/conversations/:id/messages/:clientId", auth, async (req, res) =>
 app.post("/v1/conversations/:id/attachments", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
   if (!conversation) return res.sendStatus(404);
+  if (await directMessagingBlocked(conversation)) return res.status(403).json({ error: "Messaging is unavailable because this contact is blocked" });
   const clientId = String(req.body.clientId || "").trim();
   const fileName = String(req.body.fileName || "attachment").trim().slice(0, 180);
   const mimeType = String(req.body.mimeType || "application/octet-stream").trim().slice(0, 120);
@@ -416,8 +466,9 @@ app.get("/v1/attachments/:id", auth, async (req, res) => {
 // Short-lived typing state. It is never written to message history and MongoDB
 // automatically removes stale rows when a phone disconnects unexpectedly.
 app.post("/v1/conversations/:id/typing", auth, async (req, res) => {
-  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
   if (!conversation) return res.sendStatus(404);
+  if (await directMessagingBlocked(conversation)) return res.status(403).json({ error: "This contact is blocked" });
   if (req.body.active === false) {
     await TypingState.deleteOne({ conversation: conversation._id, user: req.auth.sub });
   } else {
@@ -431,8 +482,9 @@ app.post("/v1/conversations/:id/typing", auth, async (req, res) => {
 });
 
 app.get("/v1/conversations/:id/typing", auth, async (req, res) => {
-  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
   if (!conversation) return res.sendStatus(404);
+  if (await directMessagingBlocked(conversation)) return res.json({ users: [] });
   const states = await TypingState.find({
     conversation: conversation._id,
     user: { $ne: req.auth.sub },
@@ -462,6 +514,7 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
       if (!req.body.initiator) return res.status(404).json({ error: "Call is no longer available" });
       const conversation = await Conversation.findOne({ _id: req.body.conversationId, members: req.auth.sub });
       if (!conversation) return res.sendStatus(404);
+      if (await directMessagingBlocked(conversation)) return res.status(403).json({ error: "Calling is unavailable because this contact is blocked" });
       const busy = await CallRoom.exists({ status: "active", participants: { $in: conversation.members }, expiresAt: { $gt: new Date() } });
       if (busy) {
         await Message.findOneAndUpdate(
@@ -473,6 +526,8 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
       }
       call = await CallRoom.create({ room, conversation: conversation._id, participants: conversation.members, createdBy: req.auth.sub, video: Boolean(req.body.video) });
     }
+    const callConversation = await Conversation.findById(call.conversation);
+    if (await directMessagingBlocked(callConversation)) return res.status(403).json({ error: "Calling is unavailable because this contact is blocked" });
     if (!call.participants.some((id) => id.toString() === req.auth.sub)) return res.sendStatus(403);
     if (call.status === "ended") return res.status(410).json({ error: "Call has ended" });
     if (call.status === "ringing" && call.unansweredExpiresAt < new Date()) {
@@ -495,6 +550,10 @@ app.post("/v1/calls/:room/invite", auth, async (req, res) => {
     if (!call) return res.sendStatus(404);
     const invited = await User.findOne({ username });
     if (!invited || invited._id.toString() === req.auth.sub) return res.status(404).json({ error: "Username not found" });
+    const pairKey = contactPair(req.auth.sub, invited._id);
+    const contact = await Contact.findOne({ pairKey });
+    if (contact?.blockedBy?.length) return res.status(403).json({ error: "This contact is blocked" });
+    if (!contact) await Contact.create({ pairKey, users: [req.auth.sub, invited._id], addedBy: req.auth.sub, blockedBy: [] });
     if (call.participants.length >= 6 && !call.participants.some((id) => id.toString() === invited._id.toString())) return res.status(409).json({ error: "A direct mesh call supports up to 6 members" });
     if (!call.participants.some((id) => id.toString() === invited._id.toString())) {
       call.participants.push(invited._id); await call.save();

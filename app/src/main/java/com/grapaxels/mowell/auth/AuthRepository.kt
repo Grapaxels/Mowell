@@ -23,7 +23,8 @@ data class AuthResult(val session: AuthSession? = null, val error: String? = nul
 data class RemoteConversation(
     val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
     val username: String? = null, val avatarUrl: String? = null,
-    val lastSeenAt: Long = 0L, val members: String = ""
+    val lastSeenAt: Long = 0L, val members: String = "",
+    val blocked: Boolean = false, val blockedByMe: Boolean = false
 )
 data class RemoteMessage(
     val id: String, val conversationId: String, val sender: String, val body: String,
@@ -207,7 +208,7 @@ class AuthRepository(context: Context) {
                             }
                         }
                         val title = if (isGroup) item.optString("title").ifBlank { "Mowell group" } else directName
-                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt")), directUsername, directAvatar, directLastSeen, memberNames.joinToString(", ")))
+                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt")), directUsername, directAvatar, directLastSeen, memberNames.joinToString(", "), item.optBoolean("blocked"), item.optBoolean("blockedByMe")))
                     }
                 }
             }
@@ -293,6 +294,20 @@ class AuthRepository(context: Context) {
                     val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
                     error(json.optString("error", "Message could not be deleted"))
                 }
+            }
+        }
+    }
+
+    suspend fun setBlocked(conversationId: String, blocked: Boolean): Result<Pair<Boolean, Boolean>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val builder = Request.Builder().url("$serverUrl/v1/conversations/$conversationId/block")
+                .header("Authorization", "Bearer ${session.token}")
+            val request = if (blocked) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()
+            client.newCall(request).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not update blocked user"))
+                json.optBoolean("blocked") to json.optBoolean("blockedByMe")
             }
         }
     }

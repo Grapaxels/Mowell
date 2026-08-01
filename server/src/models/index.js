@@ -45,6 +45,19 @@ export const User = mongoose.model("User", userSchema);
 export const Conversation = mongoose.model("Conversation", conversationSchema);
 export const Message = mongoose.model("Message", messageSchema);
 
+// A contact is reciprocal: when one person deliberately taps Add, the direct
+// conversation becomes visible to both people. Blocking is tracked per user,
+// while either block stops direct messaging and calls in both directions.
+const contactSchema = new mongoose.Schema({
+  pairKey: { type: String, unique: true, required: true, index: true },
+  users: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
+  addedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  blockedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }]
+}, { timestamps: true });
+contactSchema.index({ users: 1 });
+
+export const Contact = mongoose.model("Contact", contactSchema);
+
 const typingStateSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

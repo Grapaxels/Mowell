@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.location.LocationManager
 import android.media.AudioManager
+import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
@@ -34,6 +35,7 @@ import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
 import com.grapaxels.mowell.network.AppUpdater
 import com.grapaxels.mowell.network.MessageNotifier
+import com.grapaxels.mowell.network.MessageSyncService
 import com.grapaxels.mowell.network.NotificationPreferences
 import com.grapaxels.mowell.network.UpdateInfo
 import com.grapaxels.mowell.transport.BluetoothTransport
@@ -48,7 +50,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
@@ -107,6 +108,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private val router = TransportRouter(application, bluetooth)
     private val chatLocks = application.getSharedPreferences("mowell_chat_locks", Context.MODE_PRIVATE)
     private val hiddenMessages = application.getSharedPreferences("mowell_hidden_messages", Context.MODE_PRIVATE)
+    private val accountState = application.getSharedPreferences("mowell_local_account", Context.MODE_PRIVATE)
+    private var voiceRecorder: MediaRecorder? = null
+    private var voiceRecordingFile: File? = null
     val conversations = dao.observeConversations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var selectedPeer: String? = null
 
@@ -130,6 +134,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val updateStatus: StateFlow<String> = _updateStatus.asStateFlow()
     private val _typingUsers = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val typingUsers: StateFlow<Map<String, List<String>>> = _typingUsers.asStateFlow()
+    private val _voiceRecording = MutableStateFlow(false)
+    val voiceRecording: StateFlow<Boolean> = _voiceRecording.asStateFlow()
     private val typingJobs = ConcurrentHashMap<String, Job>()
     private val syncCursors = ConcurrentHashMap<String, Long>()
     private val syncing = ConcurrentHashMap.newKeySet<String>()
@@ -139,8 +145,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     init {
         bluetooth.startListening()
         viewModelScope.launch {
-            val general = conversations.value.find { it.id == "general" }
-            dao.upsertConversation(general ?: ConversationEntity("general", "Mowell Circle", "Your private online + nearby space", true, System.currentTimeMillis()))
+            _session.value?.user?.id?.let { prepareLocalAccount(it) } ?: ensureGeneralConversation()
             bluetooth.onMessage = { raw ->
                 viewModelScope.launch {
                     val packet = runCatching { JSONObject(raw) }.getOrNull()
@@ -161,12 +166,6 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                     validation.verificationEmail != null -> { _session.value = null; _verificationEmail.value = validation.verificationEmail; _authError.value = validation.error }
                     else -> refreshUpdate(showPopup = true)
                 }
-            }
-        }
-        viewModelScope.launch {
-            while (isActive) {
-                if (_session.value != null) syncAllConversations()
-                delay(1_000)
             }
         }
     }
@@ -191,6 +190,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun sendTyped(conversationId: String, body: String, kind: String) {
         if (body.isBlank()) return
+        if (conversations.value.find { it.id == conversationId }?.blocked == true) {
+            _authError.value = "Messaging is unavailable because this contact is blocked"
+            return
+        }
         updateTyping(conversationId, false)
         viewModelScope.launch {
             val id = UUID.randomUUID().toString()
@@ -253,9 +256,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         try {
             val remoteConversations = auth.fetchConversations().getOrNull() ?: return
             val notify = initialSyncComplete
+            dao.retainSyncedConversations(remoteConversations.map { it.id }.toSet())
             remoteConversations.forEach { remote ->
                 val existing = conversations.value.find { it.id == remote.id }
-                dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members, existing?.unreadCount ?: 0))
+                dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members, existing?.unreadCount ?: 0, remote.blocked, remote.blockedByMe))
                 syncConversationInternal(remote.id, remote.title, notify)
             }
             initialSyncComplete = true
@@ -333,6 +337,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun uploadAttachment(conversationId: String, uri: Uri) {
+        if (conversations.value.find { it.id == conversationId }?.blocked == true) {
+            _authError.value = "Messaging is unavailable because this contact is blocked"
+            return
+        }
         viewModelScope.launch {
             val resolver = getApplication<Application>().contentResolver
             val bytes = runCatching { resolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull() ?: return@launch
@@ -349,6 +357,54 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                 val attachmentPreview = preview(MessageEntity(item.id, conversationId, "You", item.body, item.sentAt, true, Route.INTERNET.name, "sent", item.kind))
                 dao.upsertConversation(existing?.copy(subtitle = attachmentPreview, updatedAt = item.sentAt) ?: ConversationEntity(conversationId, "Conversation", attachmentPreview, false, item.sentAt))
             }.onFailure { dao.updateDelivery(id, it.message ?: "upload failed", Route.LOCAL_ONLY.name) }
+        }
+    }
+
+    fun startVoiceRecording(conversationId: String) {
+        if (_voiceRecording.value || conversations.value.find { it.id == conversationId }?.blocked == true) return
+        if (androidx.core.content.ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            _authError.value = "Microphone permission is required to record a voice message"
+            return
+        }
+        runCatching {
+            val directory = File(getApplication<Application>().cacheDir, "voice").apply { mkdirs() }
+            val file = File(directory, "mowell_voice_${System.currentTimeMillis()}.m4a")
+            val recorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioSamplingRate(44_100)
+                setAudioEncodingBitRate(48_000)
+                setOutputFile(file.absolutePath)
+                prepare()
+                start()
+            }
+            voiceRecordingFile = file
+            voiceRecorder = recorder
+            _voiceRecording.value = true
+        }.onFailure {
+            voiceRecorder?.release()
+            voiceRecorder = null
+            voiceRecordingFile = null
+            _voiceRecording.value = false
+            _authError.value = "Could not start voice recording"
+        }
+    }
+
+    fun stopVoiceRecording(conversationId: String, send: Boolean = true) {
+        val recorder = voiceRecorder ?: return
+        val file = voiceRecordingFile
+        val completed = runCatching { recorder.stop() }.isSuccess
+        recorder.release()
+        voiceRecorder = null
+        voiceRecordingFile = null
+        _voiceRecording.value = false
+        if (completed && send && file != null && file.length() > 0) {
+            val uri = FileProvider.getUriForFile(getApplication(), "${getApplication<Application>().packageName}.files", file)
+            uploadAttachment(conversationId, uri)
+        } else if (file != null) {
+            file.delete()
+            if (send) _authError.value = "Voice recording was too short"
         }
     }
 
@@ -412,7 +468,13 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             _authBusy.value = true; _authError.value = null
             val result = block()
             _authBusy.value = false
-            if (result.session != null) { _session.value = result.session; _verificationEmail.value = null; refreshUpdate(showPopup = true) }
+            if (result.session != null) {
+                prepareLocalAccount(result.session.user.id)
+                _session.value = result.session
+                MessageSyncService.start(getApplication())
+                _verificationEmail.value = null
+                refreshUpdate(showPopup = true)
+            }
             else {
                 if (!result.verificationEmail.isNullOrBlank()) _verificationEmail.value = result.verificationEmail
                 _authError.value = result.error
@@ -474,13 +536,72 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startChat(user: UserProfile, onReady: (String) -> Unit) {
         viewModelScope.launch {
-            val conversationId = auth.createConversation(user.id).getOrElse { "user:${user.id}" }
+            val existing = conversations.value.find { it.username.equals(user.username, ignoreCase = true) }
+            if (existing != null) { onReady(existing.id); return@launch }
+            val conversationId = auth.createConversation(user.id).getOrElse {
+                _authError.value = it.message ?: "Could not add this user"
+                return@launch
+            }
             dao.upsertConversation(ConversationEntity(conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis(), user.username, user.avatarUrl))
             onReady(conversationId)
         }
     }
 
-    fun logout() { auth.logout(); _session.value = null; _userResults.value = emptyList() }
+    fun addUser(user: UserProfile) {
+        viewModelScope.launch {
+            if (conversations.value.any { it.username.equals(user.username, ignoreCase = true) }) return@launch
+            val conversationId = auth.createConversation(user.id).getOrElse {
+                _authError.value = it.message ?: "Could not add this user"
+                return@launch
+            }
+            dao.upsertConversation(ConversationEntity(conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis(), user.username, user.avatarUrl))
+        }
+    }
+
+    fun setUserBlocked(conversationId: String, blocked: Boolean) {
+        viewModelScope.launch {
+            auth.setBlocked(conversationId, blocked).onSuccess { state ->
+                conversations.value.find { it.id == conversationId }?.let { dao.upsertConversation(it.copy(blocked = state.first, blockedByMe = state.second)) }
+                if (blocked) {
+                    updateTyping(conversationId, false)
+                    notifier.clearConversation(conversationId)
+                }
+            }.onFailure { _authError.value = it.message ?: "Could not update blocked user" }
+        }
+    }
+
+    fun logout() {
+        auth.logout()
+        _session.value = null
+        _userResults.value = emptyList()
+        _typingUsers.value = emptyMap()
+        syncCursors.clear()
+        notifier.clearAll()
+        MessageSyncService.stop(getApplication())
+        accountState.edit().remove("owner_id").apply()
+        viewModelScope.launch {
+            dao.clearAccountData()
+            ensureGeneralConversation()
+        }
+    }
+
+    private suspend fun prepareLocalAccount(userId: String) {
+        val previousOwner = accountState.getString("owner_id", null)
+        if (previousOwner != userId) {
+            dao.clearAccountData()
+            hiddenMessages.edit().clear().apply()
+            chatLocks.edit().clear().apply()
+            syncCursors.clear()
+            notifier.clearAll()
+        }
+        accountState.edit().putString("owner_id", userId).apply()
+        ensureGeneralConversation()
+    }
+
+    private suspend fun ensureGeneralConversation() {
+        val general = conversations.value.find { it.id == "general" }
+        dao.upsertConversation(general ?: ConversationEntity("general", "Mowell Circle", "Your private online + nearby space", true, System.currentTimeMillis()))
+    }
     fun updateDisplayName(name: String) {
         viewModelScope.launch {
             val result = auth.updateDisplayName(name)

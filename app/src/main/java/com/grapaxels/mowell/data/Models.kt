@@ -25,7 +25,9 @@ data class ConversationEntity(
     val avatarUrl: String? = null,
     val lastSeenAt: Long = 0L,
     val members: String = "",
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val blocked: Boolean = false,
+    val blockedByMe: Boolean = false
 )
 
 data class CachedUser(

@@ -121,4 +121,9 @@ class MessageNotifier(private val context: Context) {
         }
         notificationPrefs.edit().remove(key).apply()
     }
+
+    fun clearAll() {
+        NotificationManagerCompat.from(context).cancelAll()
+        notificationPrefs.edit().clear().apply()
+    }
 }
