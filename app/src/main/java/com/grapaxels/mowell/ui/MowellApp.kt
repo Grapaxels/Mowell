@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -58,6 +59,7 @@ import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.ContactPhone
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.LocationOn
@@ -607,6 +609,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     var searchOpen by remember { mutableStateOf(false) }
     var chatQuery by remember { mutableStateOf("") }
+    var headerMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -682,12 +685,31 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                     IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
                     Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
                         Avatar(conversation?.title ?: "M", 42.dp, Violet, conversation?.avatarUrl); Spacer(Modifier.width(9.dp))
-                        Column { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
+                        Column(Modifier.weight(1f)) {
+                            Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(vm.networkLabel(), color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
-                    IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) chatQuery = "" }) { Icon(Icons.Rounded.Search, "Search chat", tint = Violet) }
                     IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
                     IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
-                    IconButton(onClick = { if (hasLock) { vm.setChatPasscode(conversationId, null); hasLock = false } else settingLock = true }) { Icon(if (hasLock) Icons.Rounded.LockOpen else Icons.Rounded.Lock, "Chat lock", tint = Violet) }
+                    Box {
+                        IconButton(onClick = { headerMenu = true }) { Icon(Icons.Rounded.MoreVert, "More", tint = Violet) }
+                        DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Search chat") },
+                                leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                                onClick = { headerMenu = false; searchOpen = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (hasLock) "Remove chat lock" else "Lock chat") },
+                                leadingIcon = { Icon(if (hasLock) Icons.Rounded.LockOpen else Icons.Rounded.Lock, null) },
+                                onClick = {
+                                    headerMenu = false
+                                    if (hasLock) { vm.setChatPasscode(conversationId, null); hasLock = false } else settingLock = true
+                                }
+                            )
+                        }
+                    }
                 }
                 AnimatedVisibility(searchOpen) {
                     OutlinedTextField(
@@ -764,7 +786,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
 private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.fillMaxWidth(.80f).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(12.dp)) {
+        Box(Modifier.widthIn(min = 88.dp, max = 310.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(horizontal = 12.dp, vertical = 9.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 when (message.kind) {
