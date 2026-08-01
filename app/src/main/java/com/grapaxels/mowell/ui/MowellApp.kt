@@ -395,6 +395,7 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
     var peopleQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("all") }
     var creatingList by remember { mutableStateOf(false) }
+    var hideTarget by remember { mutableStateOf<ConversationEntity?>(null) }
     var listName by remember { mutableStateOf("") }
     var selectedPeople by remember { mutableStateOf(setOf<String>()) }
     val people = conversations.filter { !it.isGroup && it.id != "general" }
@@ -455,6 +456,15 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
             dismissButton = { OutlinedButton(onClick = { creatingList = false }) { Text("Cancel") } }
         )
     }
+    hideTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { hideTarget = null },
+            title = { Text("Remove from chats?", fontWeight = FontWeight.Black) },
+            text = { Text("${target.title} will be removed from this screen only. You stay in the group or chat, and it returns automatically when a new incoming message arrives.") },
+            confirmButton = { Button(onClick = { vm.hideConversation(target.id); hideTarget = null }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E))) { Text("Remove") } },
+            dismissButton = { OutlinedButton(onClick = { hideTarget = null }) { Text("Cancel") } }
+        )
+    }
 
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
@@ -496,15 +506,18 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
             }
             if (users.isEmpty()) item { Text("No matching people found.", color = Muted, modifier = Modifier.padding(10.dp)) }
         } else {
-            items(visibleConversations, key = { it.id }) { conversation -> ConversationClay(conversation) { open(conversation.id) } }
+            items(visibleConversations, key = { it.id }) { conversation ->
+                ConversationClay(conversation, onClick = { open(conversation.id) }, onLongClick = { hideTarget = conversation })
+            }
             if (visibleConversations.isEmpty()) item { Text("No chats in this list yet.", color = Muted, modifier = Modifier.padding(10.dp)) }
         }
     }
 }
 
 @Composable
-private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).shadow(6.dp, RoundedCornerShape(21.dp), ambientColor = Violet.copy(alpha = .12f), spotColor = Violet.copy(alpha = .17f)).clip(RoundedCornerShape(21.dp)).background(if (conversation.isGroup) Lavender else ClayWhite).border(1.dp, Color.White.copy(alpha = .8f), RoundedCornerShape(21.dp)).padding(horizontal = 13.dp, vertical = 11.dp)) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).shadow(6.dp, RoundedCornerShape(21.dp), ambientColor = Violet.copy(alpha = .12f), spotColor = Violet.copy(alpha = .17f)).clip(RoundedCornerShape(21.dp)).background(if (conversation.isGroup) Lavender else ClayWhite).border(1.dp, Color.White.copy(alpha = .8f), RoundedCornerShape(21.dp)).padding(horizontal = 13.dp, vertical = 11.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(conversation.title, 46.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
             Spacer(Modifier.width(11.dp))
@@ -662,18 +675,40 @@ private fun CallsScreen(vm: MowellViewModel, modifier: Modifier, onCall: (CallSe
     val conversations by vm.conversations.collectAsStateWithLifecycle()
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("Calls", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("Adaptive real-time media on internet. Voice-first nearby mode.", color = Muted) }
-        items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation ->
-            ClayCard(if (conversation.isGroup) Lavender else ClayWhite) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(conversation.title, 52.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Text(conversation.title, fontWeight = FontWeight.Bold); Text(if (conversation.isGroup) "Group call" else "Direct call", color = Muted, fontSize = 12.sp) }
-                    IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
-                    IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
-                }
-            }
-        }
+        items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation -> CallHistoryCard(vm, conversation, onCall) }
         item { ClayCard(Peach) { Text("HD/4K is selected only when bandwidth, camera, CPU and thermal limits allow it. Real-time calls use adaptive WebRTC buffering—not media pre-downloading—so latency stays conversational.", fontSize = 13.sp, color = Ink) } }
     }
+}
+
+@Composable
+private fun CallHistoryCard(vm: MowellViewModel, conversation: ConversationEntity, onCall: (CallSession) -> Unit) {
+    val messages by vm.messages(conversation.id).collectAsStateWithLifecycle(initialValue = emptyList())
+    val lastEnded = messages.lastOrNull { it.kind == "call_end" }
+    val history = lastEnded?.let { callEndText(it.body) } ?: if (conversation.isGroup) "Group call" else "Direct call"
+    ClayCard(if (conversation.isGroup) Lavender else ClayWhite) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Avatar(conversation.title, 52.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl); Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(conversation.title, fontWeight = FontWeight.Bold)
+                Text(history, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
+            IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
+        }
+    }
+}
+
+private fun callEndText(body: String): String {
+    val json = runCatching { JSONObject(body) }.getOrNull() ?: return "Call ended"
+    val seconds = json.optLong("durationSeconds", 0L)
+    if (seconds <= 0L) return when (json.optString("reason")) {
+        "no_answer" -> "No answer"
+        "busy" -> "User was busy"
+        else -> "Call ended"
+    }
+    val minutes = seconds / 60
+    val remainder = seconds % 60
+    return "Call ended · ${if (minutes > 0) "${minutes}m " else ""}${remainder}s"
 }
 
 @Composable
@@ -772,6 +807,8 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
 private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity, back: () -> Unit) {
     var addingMembers by remember { mutableStateOf(false) }
     var removeMember by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var leavingGroup by remember { mutableStateOf(false) }
+    var deletingGroup by remember { mutableStateOf(false) }
     val groupStates by vm.groupMemberStates.collectAsStateWithLifecycle()
     val groupState = groupStates[conversation.id]
     val session by vm.session.collectAsStateWithLifecycle()
@@ -782,6 +819,24 @@ private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity,
     if (addingMembers) AddGroupMembersDialog(vm, conversation.id) { addingMembers = false }
     removeMember?.let { target ->
         AlertDialog(onDismissRequest = { removeMember = null }, title = { Text("Remove ${target.second}?") }, text = { Text("They will lose access to this group and its new messages.") }, confirmButton = { Button(onClick = { vm.removeGroupMember(conversation.id, target.first); removeMember = null }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E))) { Text("Remove") } }, dismissButton = { OutlinedButton(onClick = { removeMember = null }) { Text("Cancel") } })
+    }
+    if (leavingGroup) {
+        AlertDialog(
+            onDismissRequest = { leavingGroup = false },
+            title = { Text("Exit group?", fontWeight = FontWeight.Black) },
+            text = { Text("You will stop receiving new messages from ${conversation.title}. This does not delete the group for other members.") },
+            confirmButton = { Button(onClick = { vm.leaveGroup(conversation.id) { back() }; leavingGroup = false }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E))) { Text("Exit") } },
+            dismissButton = { OutlinedButton(onClick = { leavingGroup = false }) { Text("Cancel") } }
+        )
+    }
+    if (deletingGroup) {
+        AlertDialog(
+            onDismissRequest = { deletingGroup = false },
+            title = { Text("Delete group permanently?", fontWeight = FontWeight.Black) },
+            text = { Text("This deletes ${conversation.title}, its messages, invitations, and uploads for every member. This cannot be undone.") },
+            confirmButton = { Button(onClick = { vm.deleteGroup(conversation.id) { back() }; deletingGroup = false }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E))) { Text("Delete group") } },
+            dismissButton = { OutlinedButton(onClick = { deletingGroup = false }) { Text("Cancel") } }
+        )
     }
     Scaffold(containerColor = Canvas, topBar = {
         Row(Modifier.fillMaxWidth().background(Canvas).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -824,6 +879,14 @@ private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity,
             }
             if (conversation.isGroup && groupState?.viewerIsAdmin == true) item {
                 Button(onClick = { addingMembers = true }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) { Icon(Icons.Rounded.Add, null); Spacer(Modifier.width(7.dp)); Text("Add members") }
+            }
+            if (conversation.isGroup && conversation.id != "general" && groupState != null) item {
+                val viewerIsCreator = groupState?.creatorId == session?.user?.id
+                if (viewerIsCreator) {
+                    OutlinedButton(onClick = { deletingGroup = true }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB3261E))) { Text("Delete group permanently") }
+                } else {
+                    OutlinedButton(onClick = { leavingGroup = true }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB3261E))) { Text("Exit group") }
+                }
             }
             if (!conversation.isGroup) item {
                 ClayCard(Lavender) {
@@ -1113,7 +1176,7 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                         if (callEnded) Text("Call ended", color = if (message.outgoing) Color.White.copy(alpha = .75f) else Muted, fontSize = 12.sp)
                         else Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video, group) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
                     }
-                    "call_end" -> Text("Call ended", color = foreground, fontWeight = FontWeight.Bold)
+                    "call_end" -> Text(callEndText(message.body), color = foreground, fontWeight = FontWeight.Bold)
                     "system" -> Text(
                         message.body,
                         color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted,

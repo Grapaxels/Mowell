@@ -3,12 +3,15 @@ package com.grapaxels.mowell.call
 import android.Manifest
 import android.app.NotificationManager
 import android.app.AlertDialog
+import android.app.PictureInPictureParams
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.Build
+import android.util.Rational
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
@@ -84,8 +87,7 @@ class MowellCallActivity : ComponentActivity() {
         setContentView(webView)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                webView.evaluateJavascript("window.mowellHangup && window.mowellHangup()", null)
-                webView.postDelayed({ finish() }, 250)
+                if (!enterCallPictureInPicture()) moveTaskToBack(true)
             }
         })
         val permissions = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
@@ -123,6 +125,24 @@ class MowellCallActivity : ComponentActivity() {
         val html = assets.open("mowell_call.html").bufferedReader().use { it.readText() }
             .replace("__MOWELL_CONFIG__", config.toString().replace("</", "<\\/"))
         webView.loadDataWithBaseURL("https://mowell-api.grapaxels.in/", html, "text/html", "UTF-8", null)
+    }
+
+    /** Keep a live call visible when the user leaves the Mowell activity. */
+    private fun enterCallPictureInPicture(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !callPageLoaded || isFinishing || isInPictureInPictureMode) return false
+        return runCatching {
+            enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
+        }.getOrDefault(false)
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        enterCallPictureInPicture()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (::webView.isInitialized) webView.evaluateJavascript("window.mowellPip && window.mowellPip($isInPictureInPictureMode)", null)
     }
 
     private fun remoteEnded() {

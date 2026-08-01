@@ -21,7 +21,7 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         messageFlows.getOrPut(conversationId) { MutableStateFlow(loadMessages(conversationId)) }
 
     suspend fun getConversation(id: String): ConversationEntity? = withContext(Dispatchers.IO) {
-        loadConversations().find { it.id == id }
+        loadConversation(id)
     }
 
     suspend fun latestMessageTime(conversationId: String): Long = withContext(Dispatchers.IO) {
@@ -31,6 +31,10 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
     }
 
     suspend fun upsertConversation(conversation: ConversationEntity) = withContext(Dispatchers.IO) {
+        // Network syncs do not know about a user's local hide choice. Preserve it
+        // until revealConversationOnIncoming receives a genuinely new incoming item.
+        val existingHiddenAt = loadConversation(conversation.id)?.hiddenAt ?: 0L
+        val hiddenAt = if (conversation.hiddenAt > 0L) conversation.hiddenAt else existingHiddenAt
         val values = ContentValues().apply {
             put("id", conversation.id)
             put("title", conversation.title)
@@ -44,6 +48,7 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("unreadCount", conversation.unreadCount)
             put("blocked", if (conversation.blocked) 1 else 0)
             put("blockedByMe", if (conversation.blockedByMe) 1 else 0)
+            put("hiddenAt", hiddenAt)
         }
         db().insertWithOnConflict("conversations", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         conversations.value = loadConversations()
@@ -83,6 +88,40 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         db().update("conversations", values, "id = ?", arrayOf(conversationId))
         conversations.value = loadConversations()
         conversations.value.sumOf { it.unreadCount }
+    }
+
+    /** Removes only the tile from this phone. Messages are retained locally. */
+    suspend fun hideConversation(conversationId: String) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("hiddenAt", System.currentTimeMillis())
+            put("unreadCount", 0)
+        }
+        db().update("conversations", values, "id = ?", arrayOf(conversationId))
+        conversations.value = loadConversations()
+    }
+
+    /** Makes a locally hidden tile visible only when a newer message arrives from someone else. */
+    suspend fun revealConversationOnIncoming(conversationId: String, sentAt: Long): Boolean = withContext(Dispatchers.IO) {
+        val hiddenAt = loadConversation(conversationId)?.hiddenAt ?: return@withContext false
+        if (hiddenAt <= 0L || sentAt <= hiddenAt) return@withContext false
+        db().update("conversations", ContentValues().apply { put("hiddenAt", 0) }, "id = ?", arrayOf(conversationId))
+        conversations.value = loadConversations()
+        true
+    }
+
+    /** Used after leaving a group or permanently deleting one. */
+    suspend fun deleteConversation(conversationId: String) = withContext(Dispatchers.IO) {
+        val database = db()
+        database.beginTransaction()
+        try {
+            database.delete("messages", "conversationId = ?", arrayOf(conversationId))
+            database.delete("chat_list_members", "conversationId = ?", arrayOf(conversationId))
+            database.delete("conversations", "id = ?", arrayOf(conversationId))
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
+        messageFlows.remove(conversationId)?.value = emptyList()
+        conversations.value = loadConversations()
+        chatLists.value = loadChatLists()
     }
 
     suspend fun updateDelivery(id: String, delivery: String, route: String) = withContext(Dispatchers.IO) {
@@ -182,25 +221,32 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
     }
 
     private fun loadConversations(): List<ConversationEntity> = db().query(
-        "conversations", null, null, null, null, null, "updatedAt DESC"
+        "conversations", null, "hiddenAt = 0", null, null, null, "updatedAt DESC"
     ).use { cursor ->
         buildList {
-            while (cursor.moveToNext()) add(ConversationEntity(
-                cursor.getString(cursor.getColumnIndexOrThrow("id")),
-                cursor.getString(cursor.getColumnIndexOrThrow("title")),
-                cursor.getString(cursor.getColumnIndexOrThrow("subtitle")),
-                cursor.getInt(cursor.getColumnIndexOrThrow("isGroup")) == 1,
-                cursor.getLong(cursor.getColumnIndexOrThrow("updatedAt")),
-                cursor.getString(cursor.getColumnIndexOrThrow("username")),
-                cursor.getString(cursor.getColumnIndexOrThrow("avatarUrl")),
-                cursor.getLong(cursor.getColumnIndexOrThrow("lastSeenAt")),
-                cursor.getString(cursor.getColumnIndexOrThrow("members")),
-                cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount")),
-                cursor.getInt(cursor.getColumnIndexOrThrow("blocked")) == 1,
-                cursor.getInt(cursor.getColumnIndexOrThrow("blockedByMe")) == 1
-            ))
+            while (cursor.moveToNext()) add(conversationFromCursor(cursor))
         }
     }
+
+    private fun loadConversation(id: String): ConversationEntity? = db().query(
+        "conversations", null, "id = ?", arrayOf(id), null, null, null, "1"
+    ).use { cursor -> if (cursor.moveToFirst()) conversationFromCursor(cursor) else null }
+
+    private fun conversationFromCursor(cursor: android.database.Cursor) = ConversationEntity(
+        cursor.getString(cursor.getColumnIndexOrThrow("id")),
+        cursor.getString(cursor.getColumnIndexOrThrow("title")),
+        cursor.getString(cursor.getColumnIndexOrThrow("subtitle")),
+        cursor.getInt(cursor.getColumnIndexOrThrow("isGroup")) == 1,
+        cursor.getLong(cursor.getColumnIndexOrThrow("updatedAt")),
+        cursor.getString(cursor.getColumnIndexOrThrow("username")),
+        cursor.getString(cursor.getColumnIndexOrThrow("avatarUrl")),
+        cursor.getLong(cursor.getColumnIndexOrThrow("lastSeenAt")),
+        cursor.getString(cursor.getColumnIndexOrThrow("members")),
+        cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount")),
+        cursor.getInt(cursor.getColumnIndexOrThrow("blocked")) == 1,
+        cursor.getInt(cursor.getColumnIndexOrThrow("blockedByMe")) == 1,
+        cursor.getLong(cursor.getColumnIndexOrThrow("hiddenAt"))
+    )
 
     private fun loadMessages(conversationId: String): List<MessageEntity> = db().query(
         "messages", null, "conversationId = ?", arrayOf(conversationId), null, null, "sentAt ASC"

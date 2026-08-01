@@ -295,7 +295,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val notify = initialSyncComplete
             dao.retainSyncedConversations(remoteConversations.map { it.id }.toSet())
             remoteConversations.forEach { remote ->
-                val existing = conversations.value.find { it.id == remote.id }
+                val existing = dao.getConversation(remote.id)
                 dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members, existing?.unreadCount ?: 0, remote.blocked, remote.blockedByMe))
                 syncConversationInternal(remote.id, remote.title, notify)
             }
@@ -315,6 +315,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                     item.attachmentId, item.attachmentMime, item.attachmentName
                 )
                 dao.insertMessage(message)
+                if (isNew && !item.outgoing) dao.revealConversationOnIncoming(conversationId, item.sentAt)
                 if (notify && isNew && !item.outgoing) {
                     if (item.kind == "call_end") notifier.clearConversation(conversationId)
                     else {
@@ -329,7 +330,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             remote.maxOfOrNull { it.sentAt }?.let { syncCursors[conversationId] = maxOf(syncCursors[conversationId] ?: 0L, it) }
             remote.lastOrNull()?.let { last ->
                 val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, "sent", last.kind, last.attachmentId, last.attachmentMime, last.attachmentName)
-                val current = conversations.value.find { it.id == conversationId }
+                val current = dao.getConversation(conversationId)
                 dao.upsertConversation(current?.copy(subtitle = preview(message), updatedAt = last.sentAt) ?: ConversationEntity(conversationId, title, preview(message), false, last.sentAt))
             }
         }
@@ -645,6 +646,35 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             auth.removeGroupMember(conversationId, userId).onSuccess { refreshGroupMembers(conversationId); syncAllConversations() }
                 .onFailure { _authError.value = it.message ?: "Could not remove group member" }
+        }
+    }
+
+    fun hideConversation(conversationId: String) {
+        viewModelScope.launch {
+            dao.hideConversation(conversationId)
+            notifier.clearConversation(conversationId)
+        }
+    }
+
+    fun leaveGroup(conversationId: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            auth.leaveGroup(conversationId).onSuccess {
+                dao.deleteConversation(conversationId)
+                _groupMemberStates.value = _groupMemberStates.value - conversationId
+                syncAllConversations()
+                onDone()
+            }.onFailure { _authError.value = it.message ?: "Could not exit group" }
+        }
+    }
+
+    fun deleteGroup(conversationId: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            auth.deleteGroup(conversationId).onSuccess {
+                dao.deleteConversation(conversationId)
+                _groupMemberStates.value = _groupMemberStates.value - conversationId
+                syncAllConversations()
+                onDone()
+            }.onFailure { _authError.value = it.message ?: "Could not delete group" }
         }
     }
 

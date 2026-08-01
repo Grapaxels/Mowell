@@ -111,6 +111,7 @@ class MessageSyncService : Service() {
                     item.attachmentId, item.attachmentMime, item.attachmentName
                 )
                 dao.insertMessage(message)
+                if (!item.outgoing) dao.revealConversationOnIncoming(remote.id, item.sentAt)
                 if (!item.outgoing && item.sentAt > notificationFloor) newIncoming += message
             }
             if (latestIncomingTime > notificationFloor) syncState.edit().putLong(watermarkKey, latestIncomingTime).apply()

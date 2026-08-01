@@ -27,7 +27,9 @@ data class ConversationEntity(
     val members: String = "",
     val unreadCount: Int = 0,
     val blocked: Boolean = false,
-    val blockedByMe: Boolean = false
+    val blockedByMe: Boolean = false,
+    /** Local-only: hidden conversation tiles stay hidden until a newer incoming message arrives. */
+    val hiddenAt: Long = 0L
 )
 
 data class CachedUser(

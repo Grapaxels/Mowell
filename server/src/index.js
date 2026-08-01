@@ -532,6 +532,41 @@ app.delete("/v1/conversations/:id/members/:userId", auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Leaving is intentionally separate from hiding a conversation. Leaving removes
+// membership on the server; hiding is a local-only Android SQLite preference.
+app.post("/v1/conversations/:id/leave", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation) return res.sendStatus(404);
+  if (conversation.createdBy.toString() === req.auth.sub) {
+    return res.status(409).json({ error: "The group creator manages this group. Delete the group instead." });
+  }
+  await Promise.all([
+    Conversation.updateOne({ _id: conversation._id }, { $pull: { members: req.auth.sub, admins: req.auth.sub } }),
+    TypingState.deleteMany({ conversation: conversation._id, user: req.auth.sub })
+  ]);
+  res.json({ ok: true });
+});
+
+// A group can be permanently deleted only by the account that created it.
+// Associated messages, uploads, invitations, typing state, and call signalling
+// are removed so nobody can open the deleted group through an old local ID.
+app.delete("/v1/conversations/:id", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, createdBy: req.auth.sub });
+  if (!conversation) return res.status(403).json({ error: "Only the group creator can delete this group" });
+  const rooms = await CallRoom.find({ conversation: conversation._id }).select("room").lean();
+  const roomIds = rooms.map((room) => room.room);
+  await Promise.all([
+    Message.deleteMany({ conversation: conversation._id }),
+    Media.deleteMany({ conversation: conversation._id }),
+    TypingState.deleteMany({ conversation: conversation._id }),
+    GroupInvitation.deleteMany({ conversation: conversation._id }),
+    CallRoom.deleteMany({ conversation: conversation._id }),
+    roomIds.length ? CallSignal.deleteMany({ room: { $in: roomIds } }) : Promise.resolve(),
+    conversation.deleteOne()
+  ]);
+  res.json({ ok: true });
+});
+
 app.post("/v1/conversations/:id/block", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub, isGroup: false });
   if (!conversation || conversation.members.length !== 2) return res.sendStatus(404);
@@ -674,10 +709,12 @@ app.get("/v1/conversations/:id/typing", auth, async (req, res) => {
 const validRoom = (room) => /^[A-Za-z0-9-]{8,100}$/.test(room);
 const endCall = async (call, reason = "ended", senderId = null) => {
   if (call.status === "ended") return;
-  call.status = "ended"; call.endedAt = new Date(); await call.save();
+  const endedAt = new Date();
+  const durationSeconds = call.answeredAt ? Math.max(0, Math.floor((endedAt.getTime() - call.answeredAt.getTime()) / 1000)) : 0;
+  call.status = "ended"; call.endedAt = endedAt; await call.save();
   await Message.findOneAndUpdate(
     { conversation: call.conversation, clientId: `call-end-${call.room}` },
-    { $setOnInsert: { sender: senderId || call.createdBy, body: JSON.stringify({ room: call.room, reason }), kind: "call_end", sentAt: new Date() } },
+    { $setOnInsert: { sender: senderId || call.createdBy, body: JSON.stringify({ room: call.room, reason, durationSeconds }), kind: "call_end", sentAt: endedAt } },
     { upsert: true, new: true }
   );
 };

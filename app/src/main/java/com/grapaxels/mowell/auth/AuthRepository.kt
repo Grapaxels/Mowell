@@ -294,6 +294,25 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun leaveGroup(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/leave")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
+                .post("{}".toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not exit group"))
+        }
+    }
+
+    suspend fun deleteGroup(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").delete().build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not delete group"))
+        }
+    }
+
     suspend fun createConversation(userId: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val body = JSONObject().put("memberIds", org.json.JSONArray().put(userId))
