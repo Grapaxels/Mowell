@@ -9,7 +9,7 @@ import mongoose from "mongoose";
 import nodemailer from "nodemailer";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
-import { CallRoom, CallSignal, Conversation, Media, Message, User } from "./models/index.js";
+import { CallRoom, CallSignal, Conversation, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -106,6 +106,21 @@ const sendVerification = async (user, force = false) => {
   });
   await user.save();
 };
+const sendPasswordReset = async (user) => {
+  const code = String(crypto.randomInt(100000, 1000000));
+  user.passwordResetCodeHash = emailCodeHash(user.email, `reset:${code}`);
+  user.passwordResetExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  user.passwordResetAttempts = 0;
+  const smtp = smtpSettings();
+  await mailer().sendMail({
+    from: process.env.SMTP_FROM || `Mowell by Grapaxels <${smtp.user}>`,
+    to: user.email,
+    subject: `${code} is your Mowell password reset code`,
+    text: `Your Mowell password reset code is ${code}. It expires in 10 minutes. If you did not request this, ignore this email.`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h1 style="margin:0">Mowell</h1><p style="color:#7357f6">by Grapaxels</p><p>Use this code to reset your password:</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;background:#ede8ff;border-radius:16px;text-align:center">${code}</div><p>This code expires in 10 minutes.</p></div>`
+  });
+  await user.save();
+};
 
 const auth = async (req, res, next) => {
   try {
@@ -199,6 +214,42 @@ app.post("/v1/auth/resend-verification", async (req, res) => {
     catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
   }
   res.json({ ok: true, message: "If the account is pending, a verification code has been sent" });
+});
+
+app.post("/v1/auth/request-password-reset", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  if (!emailPattern.test(email)) return res.status(400).json({ error: "Enter a valid email" });
+  const user = await User.findOne({ email }).select("+passwordResetCodeHash +passwordResetExpiresAt +passwordResetAttempts");
+  if (user) {
+    try { await sendPasswordReset(user); }
+    catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
+  }
+  res.json({ ok: true, message: "If this email is registered, a reset code has been sent" });
+});
+
+app.post("/v1/auth/reset-password", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const code = String(req.body.code || "").trim();
+  const password = String(req.body.password || "");
+  if (password.length < 8) return res.status(400).json({ error: "Password must have at least 8 characters" });
+  const user = await User.findOne({ email }).select("+passwordHash +passwordResetCodeHash +passwordResetExpiresAt +passwordResetAttempts");
+  if (!user || !/^\d{6}$/.test(code) || !user.passwordResetCodeHash || !user.passwordResetExpiresAt || user.passwordResetExpiresAt < new Date()) {
+    return res.status(400).json({ error: "Reset code is invalid or expired" });
+  }
+  user.passwordResetAttempts = (user.passwordResetAttempts || 0) + 1;
+  if (user.passwordResetAttempts > 5) {
+    user.passwordResetCodeHash = undefined; await user.save();
+    return res.status(429).json({ error: "Too many attempts. Request a new code" });
+  }
+  const supplied = Buffer.from(emailCodeHash(email, `reset:${code}`), "hex");
+  const expected = Buffer.from(user.passwordResetCodeHash, "hex");
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    await user.save(); return res.status(400).json({ error: "Incorrect reset code" });
+  }
+  user.passwordHash = await bcrypt.hash(password, 12);
+  user.passwordResetCodeHash = undefined; user.passwordResetExpiresAt = undefined; user.passwordResetAttempts = 0;
+  await user.save();
+  res.json({ ok: true, message: "Password updated. You can now sign in" });
 });
 
 app.post("/v1/auth/google", async (req, res) => {
@@ -307,6 +358,24 @@ app.post("/v1/conversations/:id/messages", auth, async (req, res) => {
   res.status(201).json({ message });
 });
 
+app.delete("/v1/conversations/:id/messages/:clientId", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  if (!conversation) return res.sendStatus(404);
+  // Delete-for-me is intentionally local to the phone. The server only needs
+  // to mutate shared history when the sender chooses Delete for everyone.
+  if (String(req.query.everyone) !== "true") return res.json({ ok: true, scope: "me" });
+  const message = await Message.findOne({ conversation: conversation._id, clientId: req.params.clientId });
+  if (!message) return res.sendStatus(404);
+  if (message.sender.toString() !== req.auth.sub) return res.status(403).json({ error: "Only the sender can delete this message for everyone" });
+  if (Date.now() - message.sentAt.getTime() > 4 * 60 * 1000) return res.status(409).json({ error: "Delete for everyone is available for four minutes" });
+  if (message.kind !== "text") return res.status(409).json({ error: "Only text messages can be deleted for everyone" });
+  message.body = "This message was deleted";
+  message.kind = "system";
+  message.sentAt = new Date();
+  await message.save();
+  res.json({ ok: true, scope: "everyone" });
+});
+
 app.post("/v1/conversations/:id/attachments", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
   if (!conversation) return res.sendStatus(404);
@@ -344,7 +413,44 @@ app.get("/v1/attachments/:id", auth, async (req, res) => {
   res.send(media.data);
 });
 
+// Short-lived typing state. It is never written to message history and MongoDB
+// automatically removes stale rows when a phone disconnects unexpectedly.
+app.post("/v1/conversations/:id/typing", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  if (!conversation) return res.sendStatus(404);
+  if (req.body.active === false) {
+    await TypingState.deleteOne({ conversation: conversation._id, user: req.auth.sub });
+  } else {
+    await TypingState.updateOne(
+      { conversation: conversation._id, user: req.auth.sub },
+      { $set: { expiresAt: new Date(Date.now() + 7000) } },
+      { upsert: true }
+    );
+  }
+  res.json({ ok: true });
+});
+
+app.get("/v1/conversations/:id/typing", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  if (!conversation) return res.sendStatus(404);
+  const states = await TypingState.find({
+    conversation: conversation._id,
+    user: { $ne: req.auth.sub },
+    expiresAt: { $gt: new Date() }
+  }).populate("user", "displayName username").limit(8).lean();
+  res.json({ users: states.map((state) => state.user?.displayName || state.user?.username).filter(Boolean) });
+});
+
 const validRoom = (room) => /^[A-Za-z0-9-]{8,100}$/.test(room);
+const endCall = async (call, reason = "ended", senderId = null) => {
+  if (call.status === "ended") return;
+  call.status = "ended"; call.endedAt = new Date(); await call.save();
+  await Message.findOneAndUpdate(
+    { conversation: call.conversation, clientId: `call-end-${call.room}` },
+    { $setOnInsert: { sender: senderId || call.createdBy, body: JSON.stringify({ room: call.room, reason }), kind: "call_end", sentAt: new Date() } },
+    { upsert: true, new: true }
+  );
+};
 
 // Create/join a short-lived call room. Only identities already invited may join.
 app.post("/v1/calls/:room/join", auth, async (req, res) => {
@@ -356,10 +462,27 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
       if (!req.body.initiator) return res.status(404).json({ error: "Call is no longer available" });
       const conversation = await Conversation.findOne({ _id: req.body.conversationId, members: req.auth.sub });
       if (!conversation) return res.sendStatus(404);
-      call = await CallRoom.create({ room, participants: conversation.members, createdBy: req.auth.sub, video: Boolean(req.body.video) });
+      const busy = await CallRoom.exists({ status: "active", participants: { $in: conversation.members }, expiresAt: { $gt: new Date() } });
+      if (busy) {
+        await Message.findOneAndUpdate(
+          { conversation: conversation._id, clientId: `call-end-${room}` },
+          { $setOnInsert: { sender: req.auth.sub, body: JSON.stringify({ room, reason: "busy" }), kind: "call_end", sentAt: new Date() } },
+          { upsert: true }
+        );
+        return res.status(409).json({ error: "User is in another call", code: "USER_BUSY" });
+      }
+      call = await CallRoom.create({ room, conversation: conversation._id, participants: conversation.members, createdBy: req.auth.sub, video: Boolean(req.body.video) });
     }
     if (!call.participants.some((id) => id.toString() === req.auth.sub)) return res.sendStatus(403);
-    res.json({ ok: true, video: call.video, group: call.participants.length > 2 });
+    if (call.status === "ended") return res.status(410).json({ error: "Call has ended" });
+    if (call.status === "ringing" && call.unansweredExpiresAt < new Date()) {
+      await endCall(call, "no_answer");
+      return res.status(410).json({ error: "User didn't respond", code: "NO_ANSWER" });
+    }
+    if (call.status === "ringing" && call.createdBy.toString() !== req.auth.sub) {
+      call.status = "active"; call.answeredAt = new Date(); await call.save();
+    }
+    res.json({ ok: true, video: call.video, group: call.participants.length > 2, status: call.status });
   } catch { res.status(400).json({ error: "Could not join call" }); }
 });
 
@@ -392,12 +515,19 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
     const room = String(req.params.room || "").trim();
     const type = String(req.body.type || "");
     if (!validRoom(room)) return res.status(400).json({ error: "Invalid call room" });
-    if (!["join", "offer", "answer", "ice", "leave"].includes(type)) return res.status(400).json({ error: "Invalid call signal" });
+    if (!["join", "offer", "answer", "ice", "leave", "media"].includes(type)) return res.status(400).json({ error: "Invalid call signal" });
     const call = await CallRoom.findOne({ room, participants: req.auth.sub });
     if (!call) return res.sendStatus(404);
+    if (type === "media" && req.body.payload?.video && !call.video) {
+      call.video = true;
+      await call.save();
+    }
     const target = req.body.target ? String(req.body.target) : null;
     if (target && !call.participants.some((id) => id.toString() === target)) return res.sendStatus(403);
     const signal = await CallSignal.create({ room, sender: req.auth.sub, target, type, payload: req.body.payload || {} });
+    if (type === "leave" && (call.participants.length <= 2 || req.body.payload?.reason === "no_answer")) {
+      await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
+    }
     res.status(201).json({ id: signal._id.toString() });
   } catch { res.status(400).json({ error: "Could not send call signal" }); }
 });
@@ -407,6 +537,11 @@ app.get("/v1/calls/:room/signals", auth, async (req, res) => {
     const room = String(req.params.room || "").trim();
     const call = await CallRoom.findOne({ room, participants: req.auth.sub });
     if (!call) return res.sendStatus(404);
+    if (call.status === "ended") return res.status(410).json({ error: "Call has ended" });
+    if (call.status === "ringing" && call.unansweredExpiresAt < new Date()) {
+      await endCall(call, "no_answer");
+      return res.status(410).json({ error: "User didn't respond", code: "NO_ANSWER" });
+    }
     const filter = { room, sender: { $ne: req.auth.sub }, $or: [{ target: null }, { target: req.auth.sub }] };
     if (req.query.afterId) {
       if (!mongoose.isValidObjectId(req.query.afterId)) return res.status(400).json({ error: "Invalid call cursor" });

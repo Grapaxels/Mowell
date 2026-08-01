@@ -9,6 +9,8 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.location.LocationManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -32,6 +34,7 @@ import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
 import com.grapaxels.mowell.network.AppUpdater
 import com.grapaxels.mowell.network.MessageNotifier
+import com.grapaxels.mowell.network.NotificationPreferences
 import com.grapaxels.mowell.network.UpdateInfo
 import com.grapaxels.mowell.transport.BluetoothTransport
 import com.grapaxels.mowell.transport.Route
@@ -44,6 +47,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -102,6 +106,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val bluetooth = BluetoothTransport(application)
     private val router = TransportRouter(application, bluetooth)
     private val chatLocks = application.getSharedPreferences("mowell_chat_locks", Context.MODE_PRIVATE)
+    private val hiddenMessages = application.getSharedPreferences("mowell_hidden_messages", Context.MODE_PRIVATE)
     val conversations = dao.observeConversations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var selectedPeer: String? = null
 
@@ -113,6 +118,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val authError: StateFlow<String?> = _authError.asStateFlow()
     private val _verificationEmail = MutableStateFlow<String?>(null)
     val verificationEmail: StateFlow<String?> = _verificationEmail.asStateFlow()
+    private val _passwordResetStatus = MutableStateFlow<String?>(null)
+    val passwordResetStatus: StateFlow<String?> = _passwordResetStatus.asStateFlow()
     private val _userResults = MutableStateFlow<List<UserProfile>>(emptyList())
     val userResults: StateFlow<List<UserProfile>> = _userResults.asStateFlow()
     private val _update = MutableStateFlow<UpdateInfo?>(null)
@@ -121,6 +128,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val showUpdatePopup: StateFlow<Boolean> = _showUpdatePopup.asStateFlow()
     private val _updateStatus = MutableStateFlow("Ready to check")
     val updateStatus: StateFlow<String> = _updateStatus.asStateFlow()
+    private val _typingUsers = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val typingUsers: StateFlow<Map<String, List<String>>> = _typingUsers.asStateFlow()
+    private val typingJobs = ConcurrentHashMap<String, Job>()
     private val syncCursors = ConcurrentHashMap<String, Long>()
     private val syncing = ConcurrentHashMap.newKeySet<String>()
     private val syncingAll = AtomicBoolean(false)
@@ -174,8 +184,14 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         sendTyped(conversationId, body, "text")
     }
 
+    fun sendReply(conversationId: String, body: String, reply: MessageEntity) {
+        val preview = reply.body.replace('\n', ' ').take(90)
+        sendTyped(conversationId, "↩ ${reply.sender}: $preview\n${body.trim()}", "text")
+    }
+
     private fun sendTyped(conversationId: String, body: String, kind: String) {
         if (body.isBlank()) return
+        updateTyping(conversationId, false)
         viewModelScope.launch {
             val id = UUID.randomUUID().toString()
             val now = System.currentTimeMillis()
@@ -186,6 +202,40 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val payload = JSONObject().put("clientId", id).put("body", body.trim()).put("kind", kind).toString()
             val result = router.send(conversationId, selectedPeer, payload)
             dao.updateDelivery(id, if (result.delivered) "sent" else "stored", result.route.name)
+            if (kind == "text" && NotificationPreferences.sendSound(getApplication())) playSendTone()
+        }
+    }
+
+    fun updateTyping(conversationId: String, active: Boolean) {
+        if (conversationId.startsWith("user:")) return
+        typingJobs.remove(conversationId)?.cancel()
+        if (!active) {
+            viewModelScope.launch { auth.setTyping(conversationId, false) }
+            return
+        }
+        typingJobs[conversationId] = viewModelScope.launch {
+            auth.setTyping(conversationId, true)
+            delay(4_500)
+            auth.setTyping(conversationId, false)
+            typingJobs.remove(conversationId)
+        }
+    }
+
+    fun refreshTyping(conversationId: String) {
+        if (conversationId.startsWith("user:")) return
+        viewModelScope.launch {
+            auth.fetchTyping(conversationId).onSuccess { users ->
+                _typingUsers.value = _typingUsers.value.toMutableMap().apply { put(conversationId, users) }
+            }
+        }
+    }
+
+    private suspend fun playSendTone() {
+        kotlinx.coroutines.withContext(Dispatchers.Default) {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 45)
+            tone.startTone(ToneGenerator.TONE_PROP_ACK, 90)
+            delay(120)
+            tone.release()
         }
     }
 
@@ -216,6 +266,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         val after = syncCursors[conversationId] ?: 0L
         auth.fetchMessages(conversationId, after).onSuccess { remote ->
             remote.forEach { item ->
+                if (hiddenMessages.getStringSet(item.conversationId, emptySet()).orEmpty().contains(item.id)) return@forEach
                 val isNew = !dao.hasMessage(item.id)
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
@@ -224,8 +275,11 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 dao.insertMessage(message)
                 if (notify && isNew && !item.outgoing) {
-                    val unread = dao.incrementUnread(conversationId)
-                    notifier.show(title, message, unread, conversations.value.find { it.id == conversationId }?.avatarUrl)
+                    if (item.kind == "call_end") notifier.clearConversation(conversationId)
+                    else {
+                        val unread = dao.incrementUnread(conversationId)
+                        notifier.show(title, message, unread, conversations.value.find { it.id == conversationId }?.avatarUrl)
+                    }
                 }
                 if (!item.outgoing && item.kind == "call_end") {
                     runCatching { JSONObject(item.body).optString("room") }.getOrNull()?.takeIf { it.isNotBlank() }?.let { CallCoordinator.endIfActive(getApplication(), it) }
@@ -300,16 +354,40 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
 
     fun openAttachment(context: Context, message: MessageEntity) {
         val id = message.attachmentId ?: return
+        context.startActivity(Intent(context, MowellAttachmentActivity::class.java)
+            .putExtra(MowellAttachmentActivity.EXTRA_ID, id)
+            .putExtra(MowellAttachmentActivity.EXTRA_MIME, message.attachmentMime)
+            .putExtra(MowellAttachmentActivity.EXTRA_NAME, message.attachmentName ?: message.body))
+    }
+
+    fun openContact(context: Context, name: String, phone: String) {
+        context.startActivity(Intent(context, MowellAttachmentActivity::class.java)
+            .putExtra(MowellAttachmentActivity.EXTRA_CONTACT, true)
+            .putExtra(MowellAttachmentActivity.EXTRA_NAME, name)
+            .putExtra(MowellAttachmentActivity.EXTRA_PHONE, phone))
+    }
+
+    fun deleteMessage(message: MessageEntity, everyone: Boolean) {
         viewModelScope.launch {
-            auth.downloadAttachment(id).onSuccess { (mime, bytes) ->
-                val folder = File(context.cacheDir, "mowell_media").apply { mkdirs() }
-                val safeName = (message.attachmentName ?: "attachment").replace(Regex("[^A-Za-z0-9._-]"), "_")
-                val file = File(folder, "${id}_$safeName").apply { writeBytes(bytes) }
-                val contentUri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-                context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(contentUri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+            if (!everyone) {
+                val hidden = hiddenMessages.getStringSet(message.conversationId, emptySet()).orEmpty().toMutableSet().apply { add(message.id) }
+                hiddenMessages.edit().putStringSet(message.conversationId, hidden).apply()
+                dao.deleteMessage(message.id)
+                return@launch
             }
+            auth.deleteMessage(message.conversationId, message.id, true).onSuccess {
+                dao.insertMessage(message.copy(body = "This message was deleted", kind = "system", sentAt = System.currentTimeMillis(), attachmentId = null, attachmentMime = null, attachmentName = null))
+            }.onFailure { _authError.value = it.message ?: "Message could not be deleted" }
         }
     }
+
+    fun floatingNotifications() = NotificationPreferences.floating(getApplication())
+    fun setFloatingNotifications(enabled: Boolean) = NotificationPreferences.setFloating(getApplication(), enabled)
+    fun sendSoundEnabled() = NotificationPreferences.sendSound(getApplication())
+    fun setSendSoundEnabled(enabled: Boolean) = NotificationPreferences.setSendSound(getApplication(), enabled)
+    fun setMessageSound(uri: Uri) = NotificationPreferences.setMessageSound(getApplication(), uri.toString())
+    fun setCallSound(uri: Uri) = NotificationPreferences.setCallSound(getApplication(), uri.toString())
+    fun setConversationSound(conversationId: String, uri: Uri) = NotificationPreferences.setConversationSound(getApplication(), conversationId, uri.toString())
 
     private fun preview(message: MessageEntity): String = when (message.kind) {
         "image" -> "Photo"
@@ -358,6 +436,26 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cancelVerification() { _verificationEmail.value = null; _authError.value = null }
+
+    fun requestPasswordReset(email: String, onSent: () -> Unit) {
+        viewModelScope.launch {
+            _authBusy.value = true; _passwordResetStatus.value = null
+            auth.requestPasswordReset(email).onSuccess { message -> _passwordResetStatus.value = message; onSent() }
+                .onFailure { _passwordResetStatus.value = it.message ?: "Could not send reset code" }
+            _authBusy.value = false
+        }
+    }
+
+    fun resetPassword(email: String, code: String, password: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            _authBusy.value = true; _passwordResetStatus.value = null
+            auth.resetPassword(email, code, password).onSuccess { message -> _passwordResetStatus.value = message; onDone() }
+                .onFailure { _passwordResetStatus.value = it.message ?: "Could not update password" }
+            _authBusy.value = false
+        }
+    }
+
+    fun clearPasswordResetStatus() { _passwordResetStatus.value = null }
 
     fun searchUsers(query: String) {
         if (query.length < 2) { _userResults.value = emptyList(); return }

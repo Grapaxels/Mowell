@@ -11,6 +11,9 @@ const userSchema = new mongoose.Schema({
   verificationExpiresAt: { type: Date, select: false },
   verificationLastSentAt: { type: Date, select: false },
   verificationAttempts: { type: Number, default: 0, select: false },
+  passwordResetCodeHash: { type: String, select: false },
+  passwordResetExpiresAt: { type: Date, select: false },
+  passwordResetAttempts: { type: Number, default: 0, select: false },
   avatarUrl: String,
   avatarData: { type: Buffer, select: false },
   avatarMime: { type: String, select: false },
@@ -42,6 +45,15 @@ export const User = mongoose.model("User", userSchema);
 export const Conversation = mongoose.model("Conversation", conversationSchema);
 export const Message = mongoose.model("Message", messageSchema);
 
+const typingStateSchema = new mongoose.Schema({
+  conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  expiresAt: { type: Date, required: true, expires: 0 }
+}, { timestamps: true });
+typingStateSchema.index({ conversation: 1, user: 1 }, { unique: true });
+
+export const TypingState = mongoose.model("TypingState", typingStateSchema);
+
 const mediaSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   uploader: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -57,7 +69,7 @@ const callSignalSchema = new mongoose.Schema({
   room: { type: String, required: true, index: true, maxlength: 100 },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   target: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  type: { type: String, enum: ["join", "offer", "answer", "ice", "leave"], required: true },
+  type: { type: String, enum: ["join", "offer", "answer", "ice", "leave", "media"], required: true },
   payload: { type: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, default: () => new Date(Date.now() + 60 * 60 * 1000), expires: 0 }
 }, { timestamps: true });
@@ -67,9 +79,14 @@ export const CallSignal = mongoose.model("CallSignal", callSignalSchema);
 
 const callRoomSchema = new mongoose.Schema({
   room: { type: String, required: true, unique: true, maxlength: 100 },
+  conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true },
   participants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   video: { type: Boolean, default: false },
+  status: { type: String, enum: ["ringing", "active", "ended"], default: "ringing", index: true },
+  answeredAt: Date,
+  endedAt: Date,
+  unansweredExpiresAt: { type: Date, default: () => new Date(Date.now() + 45 * 1000) },
   expiresAt: { type: Date, default: () => new Date(Date.now() + 6 * 60 * 60 * 1000), expires: 0 }
 }, { timestamps: true });
 

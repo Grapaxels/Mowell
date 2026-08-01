@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -20,22 +22,15 @@ import com.grapaxels.mowell.data.MessageEntity
 import org.json.JSONObject
 
 class MessageNotifier(private val context: Context) {
-    private val channelId = "mowell_messages"
     private val notificationPrefs = context.getSharedPreferences("mowell_notification_ids", Context.MODE_PRIVATE)
-
-    init {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(channelId, "Messages and calls", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "New Mowell messages, files, and call invitations"
-                enableVibration(true)
-            }
-            context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
-    }
 
     fun show(conversationTitle: String, message: MessageEntity, totalUnread: Int = 1, avatarUrl: String? = null) {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val call = message.kind == "call"
+        val floating = NotificationPreferences.floating(context)
+        val sound = if (call) NotificationPreferences.callSound(context) else NotificationPreferences.messageSound(context, message.conversationId)
+        val channelId = if (call) "mowell_calls_${sound.hashCode()}" else "mowell_messages_${floating}_${message.conversationId.hashCode()}_${sound.hashCode()}"
+        ensureChannel(channelId, call, floating, sound, conversationTitle)
         val notificationId = (message.conversationId + message.id).hashCode()
         val preview = when (message.kind) {
             "call" -> "Incoming ${if (message.body.contains("\"video\":true")) "video" else "voice"} call"
@@ -59,7 +54,8 @@ class MessageNotifier(private val context: Context) {
             .setContentTitle(if (call) preview else conversationTitle)
             .setContentText(if (call) "$conversationTitle is calling" else preview)
             .setStyle(NotificationCompat.BigTextStyle().bigText(if (call) "$conversationTitle is calling" else preview))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(if (call || floating) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+            .setSound(Uri.parse(sound))
             .setNumber(totalUnread.coerceAtLeast(1))
             .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
             .setCategory(if (call) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
@@ -86,7 +82,7 @@ class MessageNotifier(private val context: Context) {
                     putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION, notificationId)
                 }
                 val declinePending = PendingIntent.getBroadcast(context, notificationId + 1, decline, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                builder.addAction(0, "Decline", declinePending).addAction(0, "Accept", acceptPending).setOngoing(true)
+                builder.addAction(0, "Decline", declinePending).addAction(0, "Accept", acceptPending).setOngoing(true).setTimeoutAfter(45_000)
             }
         } else if (message.kind != "call_end") {
             val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
@@ -103,6 +99,19 @@ class MessageNotifier(private val context: Context) {
         val key = "conversation:${message.conversationId}"
         val ids = notificationPrefs.getStringSet(key, emptySet()).orEmpty().toMutableSet().apply { add(notificationId.toString()) }
         notificationPrefs.edit().putStringSet(key, ids).apply()
+    }
+
+    private fun ensureChannel(id: String, call: Boolean, floating: Boolean, sound: String, title: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val importance = if (call || floating) NotificationManager.IMPORTANCE_HIGH else NotificationManager.IMPORTANCE_DEFAULT
+        val channel = NotificationChannel(id, if (call) "Incoming calls" else "$title messages", importance).apply {
+            description = if (call) "Mowell incoming call ringtone" else "Messages from $title"
+            enableVibration(true)
+            setSound(Uri.parse(sound), AudioAttributes.Builder()
+                .setUsage(if (call) AudioAttributes.USAGE_NOTIFICATION_RINGTONE else AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+        }
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     fun clearConversation(conversationId: String) {

@@ -37,8 +37,10 @@ class MowellMapActivity : ComponentActivity() {
                         holder[0] = this
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.loadsImagesAutomatically = true
+                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         webViewClient = WebViewClient()
-                        loadDataWithBaseURL("https://www.openstreetmap.org", mapHtml(latitude, longitude, true), "text/html", "UTF-8", null)
+                        loadUrl(mapUrl(latitude, longitude))
                     }
                 })
                 IconButton(onClick = { finish() }, Modifier.align(Alignment.TopStart).padding(18.dp).clip(CircleShape).background(Color.White)) {
@@ -47,6 +49,12 @@ class MowellMapActivity : ComponentActivity() {
             }
         }
     }
+}
+
+fun mapUrl(latitude: Double, longitude: Double): String {
+    val delta = 0.006
+    val bbox = listOf(longitude - delta, latitude - delta, longitude + delta, latitude + delta).joinToString("%2C")
+    return "https://www.openstreetmap.org/export/embed.html?bbox=$bbox&layer=mapnik&marker=$latitude%2C$longitude"
 }
 
 fun mapHtml(latitude: Double, longitude: Double, interactive: Boolean): String = """

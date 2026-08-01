@@ -2,6 +2,7 @@ package com.grapaxels.mowell.ui
 
 import android.app.Activity
 import android.content.Intent
+import android.media.RingtoneManager
 import android.net.Uri
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -15,9 +16,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +32,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,6 +43,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AttachFile
@@ -61,6 +66,8 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -80,6 +87,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -102,6 +110,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontStyle
@@ -117,7 +126,6 @@ import com.grapaxels.mowell.MowellViewModel
 import com.grapaxels.mowell.CallSession
 import com.grapaxels.mowell.BuildConfig
 import com.grapaxels.mowell.MowellMapActivity
-import com.grapaxels.mowell.mapHtml
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
@@ -187,6 +195,7 @@ private fun SplashScreen() {
 private fun AuthScreen(vm: MowellViewModel) {
     val busy by vm.authBusy.collectAsStateWithLifecycle()
     val error by vm.authError.collectAsStateWithLifecycle()
+    val resetStatus by vm.passwordResetStatus.collectAsStateWithLifecycle()
     val verificationEmail by vm.verificationEmail.collectAsStateWithLifecycle()
     var register by remember { mutableStateOf(false) }
     var identity by remember { mutableStateOf("") }
@@ -194,6 +203,38 @@ private fun AuthScreen(vm: MowellViewModel) {
     var username by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var resetStep by remember { mutableStateOf(0) }
+    var resetEmail by remember { mutableStateOf("") }
+    var resetCode by remember { mutableStateOf("") }
+    var resetPassword by remember { mutableStateOf("") }
+
+    if (resetStep > 0) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) { resetStep = 0; vm.clearPasswordResetStatus() } },
+            title = { Text(if (resetStep == 1) "Reset password" else "Enter your reset code", fontWeight = FontWeight.Black) },
+            text = {
+                Column {
+                    if (resetStep == 1) {
+                        Text("We will send a 6-digit OTP to your registered email.", color = Muted)
+                        ClayField(resetEmail, { resetEmail = it }, "Registered email")
+                    } else {
+                        Text("Code sent to ${maskEmail(resetEmail)}", color = Muted)
+                        ClayField(resetCode, { resetCode = it.filter(Char::isDigit).take(6) }, "6-digit OTP")
+                        ClayField(resetPassword, { resetPassword = it }, "New password", password = true)
+                    }
+                    resetStatus?.let { Text(it, color = if (it.contains("sent", true) || it.contains("updated", true)) Violet else Color(0xFFB3261E), fontSize = 12.sp) }
+                }
+            },
+            confirmButton = {
+                Button(enabled = !busy && if (resetStep == 1) resetEmail.contains('@') else resetCode.length == 6 && resetPassword.length >= 8,
+                    onClick = {
+                        if (resetStep == 1) vm.requestPasswordReset(resetEmail) { resetStep = 2 }
+                        else vm.resetPassword(resetEmail, resetCode, resetPassword) { resetStep = 0; password = "" }
+                    }) { Text(if (resetStep == 1) "Send OTP" else "Update password") }
+            },
+            dismissButton = { OutlinedButton(onClick = { resetStep = 0; vm.clearPasswordResetStatus() }) { Text("Cancel") } }
+        )
+    }
 
     if (verificationEmail != null) {
         var code by remember(verificationEmail) { mutableStateOf("") }
@@ -232,6 +273,7 @@ private fun AuthScreen(vm: MowellViewModel) {
                     ClayField(email, { email = it }, "Email")
                 } else ClayField(identity, { identity = it }, "Email or username")
                 ClayField(password, { password = it }, "Password", password = true)
+                if (!register) TextButtonLine("Forgot password?") { resetEmail = identity.takeIf { it.contains('@') }.orEmpty(); resetStep = 1; vm.clearPasswordResetStatus() }
                 if (error != null) Text(error!!, color = Color(0xFFB3261E), fontSize = 13.sp, modifier = Modifier.padding(vertical = 7.dp))
                 Button(
                     onClick = { if (register) vm.register(email, username, displayName, password) else vm.login(identity, password) },
@@ -272,7 +314,7 @@ private fun MainExperience(vm: MowellViewModel) {
         )
     }
     when {
-        profile != null -> ProfileScreen(profile!!, { profile = null })
+        profile != null -> ProfileScreen(vm, profile!!, { profile = null })
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
         else -> Scaffold(
             containerColor = Canvas,
@@ -418,8 +460,16 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
     val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var editingName by remember { mutableStateOf(false) }
+    var floating by remember { mutableStateOf(vm.floatingNotifications()) }
+    var sendSound by remember { mutableStateOf(vm.sendSoundEnabled()) }
     var name by remember(session?.user?.displayName) { mutableStateOf(session?.user?.displayName.orEmpty()) }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let(vm::updateProfilePicture) }
+    val messageSoundPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)?.let(vm::setMessageSound)
+    }
+    val callSoundPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)?.let(vm::setCallSound)
+    }
     if (editingName) {
         AlertDialog(
             onDismissRequest = { editingName = false },
@@ -441,6 +491,22 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
         }
         item {
             ClayCard(ClayWhite) {
+                Text("Notifications and sounds", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { Text("Floating notifications", fontWeight = FontWeight.Bold); Text("Show messages as a heads-up card", color = Muted, fontSize = 12.sp) }
+                    Switch(checked = floating, onCheckedChange = { floating = it; vm.setFloatingNotifications(it) })
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { Text("Message sent sound", fontWeight = FontWeight.Bold); Text("Play confirmation after sending", color = Muted, fontSize = 12.sp) }
+                    Switch(checked = sendSound, onCheckedChange = { sendSound = it; vm.setSendSoundEnabled(it) })
+                }
+                OutlinedButton(onClick = { messageSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_NOTIFICATION, "Choose message sound")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming message sound") }
+                OutlinedButton(onClick = { callSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_RINGTONE, "Choose call ringtone")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming call ringtone") }
+                Text("You can also choose a different sound from each person's profile.", color = Muted, fontSize = 11.sp)
+            }
+        }
+        item {
+            ClayCard(ClayWhite) {
                 Text("App updates", fontWeight = FontWeight.Black, fontSize = 18.sp)
                 Text("Installed version ${BuildConfig.VERSION_NAME}", color = Muted, fontSize = 12.sp)
                 Text(updateStatus, color = if (update != null) Violet else Muted, fontSize = 13.sp)
@@ -453,7 +519,10 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun ProfileScreen(conversation: ConversationEntity, back: () -> Unit) {
+private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity, back: () -> Unit) {
+    val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)?.let { vm.setConversationSound(conversation.id, it) }
+    }
     Scaffold(containerColor = Canvas, topBar = {
         Row(Modifier.fillMaxWidth().background(Canvas).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
@@ -486,6 +555,7 @@ private fun ProfileScreen(conversation: ConversationEntity, back: () -> Unit) {
                     Text("Activity", fontWeight = FontWeight.Bold, color = Violet)
                     Text(if (conversation.lastSeenAt > 0) "Last seen ${SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault()).format(Date(conversation.lastSeenAt))}" else "Last seen information unavailable", color = Ink)
                     Text("Internet and nearby messaging supported", color = Muted, fontSize = 12.sp)
+                    OutlinedButton(onClick = { soundPicker.launch(ringtonePicker(RingtoneManager.TYPE_NOTIFICATION, "Sound for ${conversation.title}")) }, Modifier.fillMaxWidth()) { Text("Choose notification sound") }
                 }
             }
         }
@@ -497,6 +567,9 @@ private fun ProfileScreen(conversation: ConversationEntity, back: () -> Unit) {
 private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> Unit, call: (CallSession) -> Unit, profile: (ConversationEntity) -> Unit) {
     val messages by vm.messages(conversationId).collectAsStateWithLifecycle(initialValue = emptyList())
     val conversation = vm.conversations.collectAsStateWithLifecycle().value.find { it.id == conversationId }
+    val typingState by vm.typingUsers.collectAsStateWithLifecycle()
+    val typing = typingState[conversationId].orEmpty()
+    val endedRooms = messages.filter { it.kind == "call_end" }.mapNotNull { runCatching { JSONObject(it.body).optString("room") }.getOrNull() }.toSet()
     var text by remember { mutableStateOf("") }
     var attachments by remember { mutableStateOf(false) }
     var unlocked by remember(conversationId) { mutableStateOf(!vm.isChatLocked(conversationId)) }
@@ -505,11 +578,13 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     var unlockError by remember { mutableStateOf(false) }
     var settingLock by remember { mutableStateOf(false) }
     var newCode by remember { mutableStateOf("") }
+    var replyTo by remember { mutableStateOf<MessageEntity?>(null) }
+    var deleteTarget by remember { mutableStateOf<MessageEntity?>(null) }
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { vm.uploadAttachment(conversationId, it) } }
     val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri -> uri?.let { vm.shareContact(conversationId, it) } }
-    val send = { vm.send(conversationId, text); text = "" }
+    val send = { replyTo?.let { vm.sendReply(conversationId, text, it) } ?: vm.send(conversationId, text); vm.updateTyping(conversationId, false); text = ""; replyTo = null }
     if (!unlocked) {
         BackHandler { back() }
         Box(Modifier.fillMaxSize().background(Canvas).padding(24.dp), contentAlignment = Alignment.Center) {
@@ -531,10 +606,26 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             confirmButton = { Button(enabled = newCode.length >= 4, onClick = { vm.setChatPasscode(conversationId, newCode); hasLock = true; settingLock = false }) { Text("Lock") } },
             dismissButton = { OutlinedButton(onClick = { settingLock = false }) { Text("Cancel") } })
     }
+    deleteTarget?.let { target ->
+        val canDeleteEveryone = target.outgoing && target.kind == "text" && System.currentTimeMillis() - target.sentAt <= 4 * 60 * 1000
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete message?", fontWeight = FontWeight.Black) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = { vm.deleteMessage(target, false); deleteTarget = null }, Modifier.fillMaxWidth()) { Text("Delete for me") }
+                    if (canDeleteEveryone) OutlinedButton(onClick = { vm.deleteMessage(target, true); deleteTarget = null }, Modifier.fillMaxWidth()) { Text("Delete for everyone") }
+                    if (target.outgoing && target.kind == "text" && !canDeleteEveryone) Text("Delete for everyone expires four minutes after sending.", color = Muted, fontSize = 12.sp)
+                }
+            },
+            confirmButton = {}, dismissButton = { OutlinedButton(onClick = { deleteTarget = null }) { Text("Cancel") } }
+        )
+    }
     LaunchedEffect(conversationId) {
         vm.markConversationRead(conversationId)
-        while (true) { vm.syncConversation(conversationId); delay(2_000) }
+        while (true) { vm.syncConversation(conversationId); vm.refreshTyping(conversationId); delay(1_000) }
     }
+    DisposableEffect(conversationId) { onDispose { vm.updateTyping(conversationId, false) } }
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
         vm.markConversationRead(conversationId)
@@ -546,7 +637,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                 IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
                 Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
                     Avatar(conversation?.title ?: "M", 42.dp, Violet, conversation?.avatarUrl); Spacer(Modifier.width(9.dp))
-                    Column { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
+                    Column { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
                 }
                 IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
                 IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
@@ -554,7 +645,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             }
         },
         bottomBar = {
-            Row(Modifier.fillMaxWidth().background(Canvas).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.fillMaxWidth().background(Canvas)) {
+                AnimatedVisibility(replyTo != null) {
+                    Row(Modifier.fillMaxWidth().background(Lavender).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text("Replying to ${replyTo?.sender.orEmpty()}", color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text(replyTo?.body.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Muted, fontSize = 11.sp) }
+                        IconButton(onClick = { replyTo = null }) { Text("×", fontSize = 25.sp) }
+                    }
+                }
+                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
                 Box {
                     IconButton(onClick = { attachments = true }) { Icon(Icons.Rounded.AttachFile, "Share", tint = Violet) }
                     DropdownMenu(expanded = attachments, onDismissRequest = { attachments = false }) {
@@ -563,24 +661,27 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Rounded.ContactPhone, null) }, onClick = { attachments = false; contactPicker.launch(null) })
                     }
                 }
-                TextField(value = text, onValueChange = { text = it }, placeholder = { Text("Write something…") }, modifier = Modifier.weight(1f).shadow(6.dp, RoundedCornerShape(22.dp)), shape = RoundedCornerShape(22.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
+                TextField(value = text, onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) }, placeholder = { Text("Write something…") }, modifier = Modifier.weight(1f).heightIn(min = 54.dp, max = 132.dp).shadow(6.dp, RoundedCornerShape(22.dp)), minLines = 1, maxLines = 5, shape = RoundedCornerShape(22.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
                 Spacer(Modifier.width(8.dp)); IconButton(onClick = send, Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(Lime)) { Icon(Icons.Rounded.Send, "Send", tint = Ink) }
+                }
             }
         }
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState, contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             items(messages, key = { it.id }) { message ->
-                MessageClay(message, openAttachment = { vm.openAttachment(context, message) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
+                val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
+                MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { deleteTarget = message }, openAttachment = { vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
+private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.fillMaxWidth(.80f).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(12.dp)) {
+        Box(Modifier.fillMaxWidth(.80f).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = {}, onLongClick = onLongPress).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(12.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 when (message.kind) {
@@ -600,7 +701,7 @@ private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, join
                                     settings.javaScriptEnabled = true
                                     settings.domStorageEnabled = true
                                     webViewClient = WebViewClient()
-                                    loadDataWithBaseURL("https://www.openstreetmap.org", mapHtml(lat, lon, false), "text/html", "UTF-8", null)
+                                    loadUrl(mapUrl(lat, lon))
                                 }
                             })
                             Box(Modifier.fillMaxSize().clickable {
@@ -611,15 +712,21 @@ private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, join
                     }
                     "contact" -> {
                         val data = runCatching { JSONObject(message.body) }.getOrNull()
-                        Text(data?.optString("name") ?: "Contact", color = foreground, fontWeight = FontWeight.Bold)
-                        Text(data?.optString("phone").orEmpty(), color = if (message.outgoing) Color.White.copy(alpha = .8f) else Muted)
+                        val contactName = data?.optString("name") ?: "Contact"
+                        val contactPhone = data?.optString("phone").orEmpty()
+                        Column(Modifier.fillMaxWidth().clickable { openContact(contactName, contactPhone) }) {
+                            Text(contactName, color = foreground, fontWeight = FontWeight.Bold)
+                            Text(contactPhone, color = if (message.outgoing) Color.White.copy(alpha = .8f) else Muted)
+                            Text("Tap to open contact in Mowell", color = if (message.outgoing) Lime else Violet, fontSize = 11.sp)
+                        }
                     }
                     "call" -> {
                         val data = runCatching { JSONObject(message.body) }.getOrNull()
                         val video = data?.optBoolean("video") ?: false
                         val group = data?.optBoolean("group") ?: false
                         Text(if (video) "Video call" else "Voice call", color = foreground, fontWeight = FontWeight.Bold)
-                        Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video, group) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
+                        if (callEnded) Text("Call ended", color = if (message.outgoing) Color.White.copy(alpha = .75f) else Muted, fontSize = 12.sp)
+                        else Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video, group) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
                     }
                     "call_end" -> Text("Call ended", color = foreground, fontWeight = FontWeight.Bold)
                     else -> Text(message.body, color = foreground)
@@ -640,7 +747,8 @@ private fun ClayCard(color: Color, modifier: Modifier = Modifier, content: @Comp
 
 @Composable
 private fun ClayField(value: String, change: (String) -> Unit, label: String, password: Boolean = false, leading: ImageVector? = null) {
-    OutlinedTextField(value = value, onValueChange = change, label = { Text(label) }, leadingIcon = leading?.let { icon -> { Icon(icon, null, tint = Violet) } }, visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None, singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), shape = RoundedCornerShape(18.dp))
+    var reveal by remember { mutableStateOf(false) }
+    OutlinedTextField(value = value, onValueChange = change, label = { Text(label) }, leadingIcon = leading?.let { icon -> { Icon(icon, null, tint = Violet) } }, trailingIcon = if (password) {{ IconButton(onClick = { reveal = !reveal }) { Icon(if (reveal) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (reveal) "Hide password" else "Show password", tint = Violet) } }} else null, visualTransformation = if (password && !reveal) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None, singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), shape = RoundedCornerShape(18.dp))
 }
 
 @Composable
@@ -672,4 +780,23 @@ private fun maskEmail(email: String): String {
     val suffix = domain.substringAfterLast('.', "").takeLast(2)
     return "${local.take(2).padEnd(2, '*')}****@****.**${suffix.padStart(2, '*')}"
 }
+@Composable
+private fun TypingLine(names: String) {
+    var dots by remember(names) { mutableStateOf(1) }
+    LaunchedEffect(names) { while (true) { delay(320); dots = dots % 3 + 1 } }
+    Text("$names typing${".".repeat(dots)}", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+}
+
+private fun ringtonePicker(type: Int, title: String) = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+    .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, type)
+    .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, title)
+    .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+    .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+
+private fun mapUrl(latitude: Double, longitude: Double): String {
+    val delta = 0.006
+    val bbox = listOf(longitude - delta, latitude - delta, longitude + delta, latitude + delta).joinToString("%2C")
+    return "https://www.openstreetmap.org/export/embed.html?bbox=$bbox&layer=mapnik&marker=$latitude%2C$longitude"
+}
+
 private fun route(route: String) = when (route) { "INTERNET" -> "INTERNET"; "BLUETOOTH" -> "NEARBY"; "LOCAL_ONLY" -> "SAVED"; else -> route }

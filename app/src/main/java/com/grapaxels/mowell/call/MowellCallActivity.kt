@@ -2,10 +2,12 @@ package com.grapaxels.mowell.call
 
 import android.Manifest
 import android.app.NotificationManager
+import android.app.AlertDialog
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -127,5 +129,13 @@ class MowellCallActivity : ComponentActivity() {
     private inner class CallBridge(private val audio: AudioManager) {
         @JavascriptInterface fun setSpeaker(enabled: Boolean) = runOnUiThread { audio.isSpeakerphoneOn = enabled }
         @JavascriptInterface fun finishCall() = runOnUiThread { finish() }
+        @JavascriptInterface fun showMessage(message: String) = runOnUiThread {
+            if (!isFinishing) AlertDialog.Builder(this@MowellCallActivity).setTitle("Mowell call").setMessage(message).setPositiveButton("OK", null).show()
+        }
+        @JavascriptInterface fun playBusyTone() = runOnUiThread {
+            val tone = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 75)
+            tone.startTone(ToneGenerator.TONE_SUP_BUSY, 1600)
+            webView.postDelayed({ tone.release() }, 1800)
+        }
     }
 }

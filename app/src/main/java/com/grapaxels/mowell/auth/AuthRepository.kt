@@ -82,6 +82,30 @@ class AuthRepository(context: Context) {
         } catch (error: Exception) { AuthResult(error = error.message ?: "Could not resend code", verificationEmail = email) }
     }
 
+    suspend fun requestPasswordReset(email: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("email", email.trim())
+            client.newCall(Request.Builder().url("$serverUrl/v1/auth/request-password-reset")
+                .post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not send reset code"))
+                json.optString("message", "Reset code sent")
+            }
+        }
+    }
+
+    suspend fun resetPassword(email: String, code: String, password: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("email", email.trim()).put("code", code.trim()).put("password", password)
+            client.newCall(Request.Builder().url("$serverUrl/v1/auth/reset-password")
+                .post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not update password"))
+                json.optString("message", "Password updated")
+            }
+        }
+    }
+
     suspend fun validateSession(): AuthResult = withContext(Dispatchers.IO) {
         try {
             val session = savedSession ?: return@withContext AuthResult(error = "Not signed in")
@@ -231,6 +255,44 @@ class AuthRepository(context: Context) {
                 .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
                 if (!response.isSuccessful) error("Attachment download failed")
                 response.header("Content-Type", "application/octet-stream")!! to (response.body?.bytes() ?: error("Empty attachment"))
+            }
+        }
+    }
+
+    suspend fun setTyping(conversationId: String, active: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val body = JSONObject().put("active", active)
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/typing")
+                .header("Authorization", "Bearer ${session.token}")
+                .post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                if (!response.isSuccessful) error("Typing update failed")
+            }
+        }
+    }
+
+    suspend fun fetchTyping(conversationId: String): Result<List<String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/typing")
+                .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
+                if (!response.isSuccessful) error("Typing status unavailable")
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                val users = json.optJSONArray("users") ?: return@use emptyList()
+                buildList { for (index in 0 until users.length()) users.optString(index).takeIf { it.isNotBlank() }?.let(::add) }
+            }
+        }
+    }
+
+    suspend fun deleteMessage(conversationId: String, clientId: String, everyone: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/$clientId?everyone=$everyone")
+                .header("Authorization", "Bearer ${session.token}").delete().build()).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                    error(json.optString("error", "Message could not be deleted"))
+                }
             }
         }
     }

@@ -86,6 +86,15 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         conversationId?.let(::refreshMessages)
     }
 
+    suspend fun deleteMessage(id: String) = withContext(Dispatchers.IO) {
+        val database = db()
+        val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
+            if (it.moveToFirst()) it.getString(0) else null
+        }
+        database.delete("messages", "id = ?", arrayOf(id))
+        conversationId?.let(::refreshMessages)
+    }
+
     suspend fun cacheUsers(users: List<CachedUser>) = withContext(Dispatchers.IO) {
         val database = db()
         database.beginTransaction()
