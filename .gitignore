@@ -141,3 +141,26 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Android / Gradle
+.gradle/
+.kotlin/
+.idea/
+local.properties
+**/build/
+*.iml
+*.apk
+*.aab
+
+# Signing secrets
+*.jks
+*.keystore
+keystore.properties
+
+# Vercel local state
+.vercel/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/

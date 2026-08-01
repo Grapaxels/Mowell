@@ -1,0 +1,27 @@
+package com.grapaxels.mowell.data
+
+data class MessageEntity(
+    val id: String,
+    val conversationId: String,
+    val sender: String,
+    val body: String,
+    val sentAt: Long,
+    val outgoing: Boolean,
+    val route: String,
+    val delivery: String
+)
+
+data class ConversationEntity(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val isGroup: Boolean,
+    val updatedAt: Long
+)
+
+data class CachedUser(
+    val id: String,
+    val username: String,
+    val displayName: String,
+    val avatarUrl: String?
+)
