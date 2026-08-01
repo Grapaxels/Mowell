@@ -110,6 +110,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         mowellViewModel.resumeUpdateInstall(this)
+        mowellViewModel.autoCheckForUpdates()
     }
 }
 
@@ -157,10 +158,13 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private val syncCursors = ConcurrentHashMap<String, Long>()
     private val syncing = ConcurrentHashMap.newKeySet<String>()
     private val syncingAll = AtomicBoolean(false)
+    private val updateCheckRunning = AtomicBoolean(false)
+    @Volatile private var lastAutomaticUpdateCheckAt = 0L
     @Volatile private var initialSyncComplete = false
 
     init {
         bluetooth.startListening()
+        autoCheckForUpdates()
         viewModelScope.launch {
             _session.value?.user?.id?.let { prepareLocalAccount(it) } ?: ensureGeneralConversation()
             bluetooth.onMessage = { raw ->
@@ -179,9 +183,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             if (_session.value != null) {
                 val validation = auth.validateSession()
                 when {
-                    validation.session != null -> { _session.value = validation.session; refreshUpdate(showPopup = true) }
+                    validation.session != null -> _session.value = validation.session
                     validation.verificationEmail != null -> { _session.value = null; _verificationEmail.value = validation.verificationEmail; _authError.value = validation.error }
-                    else -> refreshUpdate(showPopup = true)
+                    else -> Unit
                 }
             }
         }
@@ -669,6 +673,16 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     fun dismissUpdate() { _showUpdatePopup.value = false }
     fun checkForUpdates() = checkForUpdates(showPopup = false)
     fun checkForUpdates(showPopup: Boolean) { viewModelScope.launch { refreshUpdate(showPopup) } }
+    fun autoCheckForUpdates() {
+        val now = System.currentTimeMillis()
+        if (now - lastAutomaticUpdateCheckAt < 5 * 60 * 1000L) return
+        if (!updateCheckRunning.compareAndSet(false, true)) return
+        lastAutomaticUpdateCheckAt = now
+        viewModelScope.launch {
+            try { refreshUpdate(showPopup = true) }
+            finally { updateCheckRunning.set(false) }
+        }
+    }
     fun installUpdate(activity: Activity) {
         val available = _update.value ?: return
         if (!BuildConfig.SELF_UPDATE) {

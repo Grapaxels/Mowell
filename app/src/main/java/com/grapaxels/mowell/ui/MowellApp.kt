@@ -172,6 +172,11 @@ private enum class Page { CHATS, PEOPLE, CALLS, NEARBY, YOU }
 fun MowellApp(vm: MowellViewModel) {
     val scheme = androidx.compose.material3.lightColorScheme(primary = Violet, secondary = Lime, background = Canvas, surface = ClayWhite, onPrimary = Color.White, onBackground = Ink)
     val session by vm.session.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
+    val showUpdate by vm.showUpdatePopup.collectAsStateWithLifecycle()
+    val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
+    val updateDownloading by vm.updateDownloading.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var splash by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { delay(1_500); splash = false }
 
@@ -182,6 +187,15 @@ fun MowellApp(vm: MowellViewModel) {
                 session == null -> AuthScreen(vm)
                 else -> MainExperience(vm)
             }
+        }
+        if (showUpdate && update != null) {
+            AlertDialog(
+                onDismissRequest = vm::dismissUpdate,
+                title = { Text("Mowell ${update!!.versionName} is available", fontWeight = FontWeight.Black) },
+                text = { Column { Text(if (BuildConfig.SELF_UPDATE) "A newer signed version is ready. Download and update from inside Mowell." else "A newer version is ready through Google Play."); if (updateDownloading || updateStatus.startsWith("Could not")) { Spacer(Modifier.height(9.dp)); Text(updateStatus, color = if (updateStatus.startsWith("Could not")) Color(0xFFB3261E) else Violet, fontSize = 12.sp) } } },
+                confirmButton = { Button(enabled = !updateDownloading, onClick = { (context as? Activity)?.let(vm::installUpdate) }) { if (updateDownloading) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp) else Text("Update now") } },
+                dismissButton = { OutlinedButton(enabled = !updateDownloading, onClick = vm::dismissUpdate) { Text("Later") } }
+            )
         }
     }
 }
@@ -306,10 +320,6 @@ private fun AuthScreen(vm: MowellViewModel) {
 @Composable
 private fun MainExperience(vm: MowellViewModel) {
     val context = LocalContext.current
-    val update by vm.update.collectAsStateWithLifecycle()
-    val showUpdate by vm.showUpdatePopup.collectAsStateWithLifecycle()
-    val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
-    val updateDownloading by vm.updateDownloading.collectAsStateWithLifecycle()
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf<ConversationEntity?>(null) }
@@ -320,15 +330,6 @@ private fun MainExperience(vm: MowellViewModel) {
             page != Page.CHATS -> page = Page.CHATS
             else -> Unit
         }
-    }
-    if (showUpdate && update != null) {
-        AlertDialog(
-            onDismissRequest = vm::dismissUpdate,
-            title = { Text("Mowell ${update!!.versionName} is available", fontWeight = FontWeight.Black) },
-            text = { Column { Text(if (BuildConfig.SELF_UPDATE) "Download and update from inside Mowell. Android will ask once before installing the signed update." else "Install this verified update through Google Play."); if (updateDownloading || updateStatus.startsWith("Could not")) { Spacer(Modifier.height(9.dp)); Text(updateStatus, color = if (updateStatus.startsWith("Could not")) Color(0xFFB3261E) else Violet, fontSize = 12.sp) } } },
-            confirmButton = { Button(enabled = !updateDownloading, onClick = { (context as? Activity)?.let(vm::installUpdate) }) { if (updateDownloading) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp) else Text("Update now") } },
-            dismissButton = { OutlinedButton(enabled = !updateDownloading, onClick = vm::dismissUpdate) { Text("Later") } }
-        )
     }
     when {
         profile != null -> ProfileScreen(vm, profile!!, { profile = null })
