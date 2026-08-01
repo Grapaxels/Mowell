@@ -45,6 +45,10 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("outgoing", if (message.outgoing) 1 else 0)
             put("route", message.route)
             put("delivery", message.delivery)
+            put("kind", message.kind)
+            put("attachmentId", message.attachmentId)
+            put("attachmentMime", message.attachmentMime)
+            put("attachmentName", message.attachmentName)
         }
         db().insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         refreshMessages(message.conversationId)
@@ -116,7 +120,11 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
                 cursor.getLong(cursor.getColumnIndexOrThrow("sentAt")),
                 cursor.getInt(cursor.getColumnIndexOrThrow("outgoing")) == 1,
                 cursor.getString(cursor.getColumnIndexOrThrow("route")),
-                cursor.getString(cursor.getColumnIndexOrThrow("delivery"))
+                cursor.getString(cursor.getColumnIndexOrThrow("delivery")),
+                cursor.getString(cursor.getColumnIndexOrThrow("kind")),
+                cursor.getString(cursor.getColumnIndexOrThrow("attachmentId")),
+                cursor.getString(cursor.getColumnIndexOrThrow("attachmentMime")),
+                cursor.getString(cursor.getColumnIndexOrThrow("attachmentName"))
             ))
         }
     }

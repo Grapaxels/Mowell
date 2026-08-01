@@ -31,7 +31,7 @@ class AppUpdater(private val context: Context, private val auth: AuthRepository)
             val json = JSONObject(response.body?.string().orEmpty())
             val code = json.getInt("versionCode")
             val url = json.optString("apkUrl")
-            if (code <= 2 || url.isBlank() || url == "null") null
+            if (code <= 3 || url.isBlank() || url == "null") null
             else UpdateInfo(code, json.optString("versionName", code.toString()), url, json.optBoolean("required"))
         } catch (_: Exception) { null }
     }

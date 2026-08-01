@@ -1,6 +1,13 @@
 package com.grapaxels.mowell.ui
 
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.webkit.PermissionRequest
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -29,6 +36,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Call
@@ -38,6 +46,9 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.ContactPhone
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
@@ -50,6 +61,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +77,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,6 +91,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -87,6 +102,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grapaxels.mowell.MowellViewModel
+import com.grapaxels.mowell.CallSession
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
@@ -94,6 +110,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -236,10 +253,10 @@ private fun AuthScreen(vm: MowellViewModel) {
 private fun MainExperience(vm: MowellViewModel) {
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
-    var call by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var call by remember { mutableStateOf<CallSession?>(null) }
     when {
-        call != null -> CallScreen(call!!.first, call!!.second) { call = null }
-        openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { video -> call = "Mowell call" to video })
+        call != null -> CallScreen(call!!) { call = null }
+        openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { call = it })
         else -> Scaffold(
             containerColor = Canvas,
             topBar = { ClayHeader(vm) },
@@ -257,7 +274,7 @@ private fun MainExperience(vm: MowellViewModel) {
             when (page) {
                 Page.CHATS -> ChatsScreen(vm, Modifier.padding(padding)) { openChat = it }
                 Page.PEOPLE -> PeopleScreen(vm, Modifier.padding(padding)) { user -> vm.startChat(user) { conversationId -> openChat = conversationId } }
-                Page.CALLS -> CallsScreen(Modifier.padding(padding)) { name, video -> call = name to video }
+                Page.CALLS -> CallsScreen(vm, Modifier.padding(padding)) { call = it }
                 Page.NEARBY -> NearbyScreen(vm, Modifier.padding(padding))
                 Page.YOU -> SettingsScreen(vm, Modifier.padding(padding))
             }
@@ -334,16 +351,17 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
 }
 
 @Composable
-private fun CallsScreen(modifier: Modifier, onCall: (String, Boolean) -> Unit) {
+private fun CallsScreen(vm: MowellViewModel, modifier: Modifier, onCall: (CallSession) -> Unit) {
+    val conversations by vm.conversations.collectAsStateWithLifecycle()
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("Calls", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("Adaptive real-time media on internet. Voice-first nearby mode.", color = Muted) }
-        items(listOf("Mowell Circle" to true, "Product crew" to true, "Niya" to false)) { (name, group) ->
-            ClayCard(if (group) Lavender else ClayWhite) {
+        items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation ->
+            ClayCard(if (conversation.isGroup) Lavender else ClayWhite) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(name, 52.dp, if (group) Violet else Ink); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Text(name, fontWeight = FontWeight.Bold); Text(if (group) "Group call" else "Direct call", color = Muted, fontSize = 12.sp) }
-                    IconButton(onClick = { onCall(name, false) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
-                    IconButton(onClick = { onCall(name, true) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
+                    Avatar(conversation.title, 52.dp, if (conversation.isGroup) Violet else Ink); Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) { Text(conversation.title, fontWeight = FontWeight.Bold); Text(if (conversation.isGroup) "Group call" else "Direct call", color = Muted, fontSize = 12.sp) }
+                    IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
+                    IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.title, true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
                 }
             }
         }
@@ -403,10 +421,14 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> Unit, call: (Boolean) -> Unit) {
+private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> Unit, call: (CallSession) -> Unit) {
     val messages by vm.messages(conversationId).collectAsStateWithLifecycle(initialValue = emptyList())
     val conversation = vm.conversations.collectAsStateWithLifecycle().value.find { it.id == conversationId }
     var text by remember { mutableStateOf("") }
+    var attachments by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { vm.uploadAttachment(conversationId, it) } }
+    val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri -> uri?.let { vm.shareContact(conversationId, it) } }
     val send = { vm.send(conversationId, text); text = "" }
     LaunchedEffect(conversationId) {
         while (true) { vm.syncConversation(conversationId); delay(2_000) }
@@ -418,29 +440,66 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                 IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
                 Avatar(conversation?.title ?: "M", 42.dp, Violet); Spacer(Modifier.width(9.dp))
                 Column(Modifier.weight(1f)) { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
-                IconButton(onClick = { call(false) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
-                IconButton(onClick = { call(true) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
+                IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
+                IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
             }
         },
         bottomBar = {
             Row(Modifier.fillMaxWidth().background(Canvas).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    IconButton(onClick = { attachments = true }) { Icon(Icons.Rounded.AttachFile, "Share", tint = Violet) }
+                    DropdownMenu(expanded = attachments, onDismissRequest = { attachments = false }) {
+                        DropdownMenuItem(text = { Text("Photo, video or file") }, leadingIcon = { Icon(Icons.Rounded.Description, null) }, onClick = { attachments = false; filePicker.launch("*/*") })
+                        DropdownMenuItem(text = { Text("Current location") }, leadingIcon = { Icon(Icons.Rounded.LocationOn, null) }, onClick = { attachments = false; vm.shareLocation(conversationId) })
+                        DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Rounded.ContactPhone, null) }, onClick = { attachments = false; contactPicker.launch(null) })
+                    }
+                }
                 TextField(value = text, onValueChange = { text = it }, placeholder = { Text("Write something…") }, modifier = Modifier.weight(1f).shadow(6.dp, RoundedCornerShape(22.dp)), shape = RoundedCornerShape(22.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
                 Spacer(Modifier.width(8.dp)); IconButton(onClick = send, Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(Lime)) { Icon(Icons.Rounded.Send, "Send", tint = Ink) }
             }
         }
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            items(messages, key = { it.id }) { MessageClay(it) }
+            items(messages, key = { it.id }) { message ->
+                MessageClay(message, openAttachment = { vm.openAttachment(context, message) }, joinCall = { room, video -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video)) })
+            }
         }
     }
 }
 
 @Composable
-private fun MessageClay(message: MessageEntity) {
+private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, joinCall: (String, Boolean) -> Unit) {
+    val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
         Box(Modifier.fillMaxWidth(.80f).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(12.dp)) {
             Column {
-                Text(message.body, color = if (message.outgoing) Color.White else Ink)
+                val foreground = if (message.outgoing) Color.White else Ink
+                when (message.kind) {
+                    "image", "video", "audio", "file" -> {
+                        Icon(Icons.Rounded.AttachFile, null, tint = if (message.outgoing) Lime else Violet)
+                        Text(message.attachmentName ?: message.body, color = foreground, fontWeight = FontWeight.Bold)
+                        Text(if (message.delivery == "uploading") "Uploading…" else "Tap to open", color = if (message.outgoing) Color.White.copy(alpha = .75f) else Muted, fontSize = 11.sp, modifier = Modifier.clickable(enabled = message.attachmentId != null, onClick = openAttachment))
+                    }
+                    "location" -> {
+                        val data = runCatching { JSONObject(message.body) }.getOrNull()
+                        val lat = data?.optDouble("latitude") ?: 0.0
+                        val lon = data?.optDouble("longitude") ?: 0.0
+                        Text("Location shared", color = foreground, fontWeight = FontWeight.Bold)
+                        Text("Open in Maps", color = if (message.outgoing) Lime else Violet, modifier = Modifier.clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:$lat,$lon?q=$lat,$lon"))) })
+                    }
+                    "contact" -> {
+                        val data = runCatching { JSONObject(message.body) }.getOrNull()
+                        Text(data?.optString("name") ?: "Contact", color = foreground, fontWeight = FontWeight.Bold)
+                        Text(data?.optString("phone").orEmpty(), color = if (message.outgoing) Color.White.copy(alpha = .8f) else Muted)
+                    }
+                    "call" -> {
+                        val data = runCatching { JSONObject(message.body) }.getOrNull()
+                        val video = data?.optBoolean("video") ?: false
+                        Text(if (video) "Video call" else "Voice call", color = foreground, fontWeight = FontWeight.Bold)
+                        Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
+                    }
+                    else -> Text(message.body, color = foreground)
+                }
                 Row(Modifier.align(Alignment.End)) { Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .7f) else Muted, fontSize = 9.sp); Spacer(Modifier.width(5.dp)); Text(route(message.route), color = if (message.outgoing) Lime else Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
             }
         }
@@ -448,15 +507,29 @@ private fun MessageClay(message: MessageEntity) {
 }
 
 @Composable
-private fun CallScreen(name: String, video: Boolean, end: () -> Unit) {
-    var info by remember { mutableStateOf(video) }
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Violet, VioletDark, Ink)))) {
-        Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(Modifier.height(70.dp)); Avatar(name, 102.dp, Lime); Spacer(Modifier.height(18.dp)); Text(name, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black); Text(if (video) "Adaptive video · connecting" else "Resilient voice · connecting", color = Color.White.copy(alpha = .7f)); Spacer(Modifier.weight(1f))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) { CallButton(Icons.Rounded.Mic, "Mute", Color.White.copy(alpha = .15f)) {}; if (video) CallButton(Icons.Rounded.Videocam, "Camera", Color.White.copy(alpha = .15f)) {}; CallButton(Icons.Rounded.CallEnd, "End", Color(0xFFE34855), end) }
-            Spacer(Modifier.height(35.dp))
-        }
-        if (info) AlertDialog(onDismissRequest = { info = false }, title = { Text("Adaptive streaming") }, text = { Text("Mowell will use WebRTC congestion control, jitter buffering and adaptive resolution. Bluetooth cannot carry HD/4K video, so video requires internet or Wi‑Fi.") }, confirmButton = { Button(onClick = { info = false }) { Text("Continue") } })
+private fun CallScreen(session: CallSession, end: () -> Unit) {
+    val url = "https://meet.jit.si/${session.room}#config.prejoinPageEnabled=false&config.startWithVideoMuted=${!session.video}&config.startWithAudioMuted=false"
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    BackHandler(onBack = end)
+    DisposableEffect(Unit) { onDispose { webView?.destroy() } }
+    Box(Modifier.fillMaxSize().background(Ink)) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { context ->
+                WebView(context).apply {
+                    webView = this
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    webViewClient = WebViewClient()
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onPermissionRequest(request: PermissionRequest) { request.grant(request.resources) }
+                    }
+                    loadUrl(url)
+                }
+            }
+        )
+        IconButton(onClick = end, Modifier.align(Alignment.TopEnd).padding(16.dp).size(58.dp).clip(CircleShape).background(Color(0xFFE34855))) { Icon(Icons.Rounded.CallEnd, "End", tint = Color.White) }
     }
 }
 

@@ -1,6 +1,7 @@
 package com.grapaxels.mowell.auth
 
 import android.content.Context
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -19,7 +20,13 @@ data class UserProfile(
 
 data class AuthSession(val token: String, val user: UserProfile)
 data class AuthResult(val session: AuthSession? = null, val error: String? = null)
-data class RemoteMessage(val id: String, val conversationId: String, val sender: String, val body: String, val sentAt: Long, val outgoing: Boolean)
+data class RemoteConversation(val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long)
+data class RemoteMessage(
+    val id: String, val conversationId: String, val sender: String, val body: String,
+    val sentAt: Long, val outgoing: Boolean, val kind: String = "text",
+    val attachmentId: String? = null, val attachmentMime: String? = null,
+    val attachmentName: String? = null
+)
 
 class AuthRepository(context: Context) {
     private val prefs = context.getSharedPreferences("mowell_session", Context.MODE_PRIVATE)
@@ -27,7 +34,7 @@ class AuthRepository(context: Context) {
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     var serverUrl: String
-        get() = prefs.getString("server_url", "https://api.example.invalid")!!.trimEnd('/')
+        get() = prefs.getString("server_url", "https://mowell-api.grapaxels.in")!!.trimEnd('/')
         set(value) { prefs.edit().putString("server_url", value.trim().trimEnd('/')).apply() }
 
     var googleClientId: String
@@ -78,6 +85,35 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun fetchConversations(): Result<List<RemoteConversation>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations")
+                .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Conversation sync failed"))
+                val array = json.optJSONArray("conversations") ?: return@use emptyList()
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.getJSONObject(index)
+                        val isGroup = item.optBoolean("isGroup")
+                        val members = item.optJSONArray("members")
+                        var directName = "Mowell user"
+                        if (members != null) for (memberIndex in 0 until members.length()) {
+                            val member = members.optJSONObject(memberIndex) ?: continue
+                            if (member.optString("_id") != session.user.id) {
+                                directName = member.optString("displayName", member.optString("username", directName))
+                                break
+                            }
+                        }
+                        val title = if (isGroup) item.optString("title").ifBlank { "Mowell group" } else directName
+                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt"))))
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun fetchMessages(conversationId: String, afterMillis: Long): Result<List<RemoteMessage>> = withContext(Dispatchers.IO) {
         runCatching {
             val session = savedSession ?: error("Not signed in")
@@ -90,16 +126,50 @@ class AuthRepository(context: Context) {
             buildList {
                 for (index in 0 until array.length()) {
                     val item = array.getJSONObject(index)
-                    val senderObject = item.optJSONObject("sender")
-                    val senderId = senderObject?.optString("_id").orEmpty()
-                    add(RemoteMessage(
-                        item.optString("clientId", item.optString("_id")), conversationId,
-                        senderObject?.let { it.optString("displayName", it.optString("username", "Mowell user")) } ?: "Mowell user",
-                        item.optString("body"), parseDate(item.optString("sentAt")), senderId == session.user.id
-                    ))
+                    add(parseMessage(item, conversationId, session))
                 }
             }
         }
+    }
+
+    suspend fun uploadAttachment(conversationId: String, clientId: String, fileName: String, mimeType: String, data: ByteArray): Result<RemoteMessage> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(data.size <= 2_621_440) { "Attachment must be 2.5 MB or smaller" }
+            val session = savedSession ?: error("Not signed in")
+            val body = JSONObject().put("clientId", clientId).put("fileName", fileName)
+                .put("mimeType", mimeType).put("data", Base64.encodeToString(data, Base64.NO_WRAP))
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/attachments")
+                .header("Authorization", "Bearer ${session.token}")
+                .post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Attachment upload failed"))
+                parseMessage(json.getJSONObject("message"), conversationId, session)
+            }
+        }
+    }
+
+    suspend fun downloadAttachment(id: String): Result<Pair<String, ByteArray>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/attachments/$id")
+                .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
+                if (!response.isSuccessful) error("Attachment download failed")
+                response.header("Content-Type", "application/octet-stream")!! to (response.body?.bytes() ?: error("Empty attachment"))
+            }
+        }
+    }
+
+    private fun parseMessage(item: JSONObject, conversationId: String, session: AuthSession): RemoteMessage {
+        val senderObject = item.optJSONObject("sender")
+        val senderId = senderObject?.optString("_id").orEmpty()
+        val attachment = item.optJSONObject("attachment")
+        return RemoteMessage(
+            item.optString("clientId", item.optString("_id")), conversationId,
+            senderObject?.let { it.optString("displayName", it.optString("username", "Mowell user")) } ?: "Mowell user",
+            item.optString("body"), parseDate(item.optString("sentAt")), senderId == session.user.id,
+            item.optString("kind", "text"), attachment?.optString("_id"),
+            attachment?.optString("mimeType"), attachment?.optString("fileName")
+        )
     }
 
     private fun isoDate(value: Long): String = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {

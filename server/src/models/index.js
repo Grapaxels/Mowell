@@ -24,7 +24,8 @@ const messageSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   body: { type: String, required: true, maxlength: 8000 },
-  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "system"], default: "text" },
+  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "call", "system"], default: "text" },
+  attachment: { type: mongoose.Schema.Types.ObjectId, ref: "Media" },
   sentAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 messageSchema.index({ conversation: 1, clientId: 1 }, { unique: true });
@@ -33,3 +34,14 @@ messageSchema.index({ conversation: 1, sentAt: -1 });
 export const User = mongoose.model("User", userSchema);
 export const Conversation = mongoose.model("Conversation", conversationSchema);
 export const Message = mongoose.model("Message", messageSchema);
+
+const mediaSchema = new mongoose.Schema({
+  conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
+  uploader: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  fileName: { type: String, required: true, maxlength: 180 },
+  mimeType: { type: String, required: true, maxlength: 120 },
+  size: { type: Number, required: true, max: 2621440 },
+  data: { type: Buffer, required: true, select: false }
+}, { timestamps: true });
+
+export const Media = mongoose.model("Media", mediaSchema);

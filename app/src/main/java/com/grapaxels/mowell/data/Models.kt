@@ -8,7 +8,11 @@ data class MessageEntity(
     val sentAt: Long,
     val outgoing: Boolean,
     val route: String,
-    val delivery: String
+    val delivery: String,
+    val kind: String = "text",
+    val attachmentId: String? = null,
+    val attachmentMime: String? = null,
+    val attachmentName: String? = null
 )
 
 data class ConversationEntity(

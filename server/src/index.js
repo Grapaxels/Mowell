@@ -6,7 +6,7 @@ import { OAuth2Client } from "google-auth-library";
 import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import { Conversation, Message, User } from "./models/index.js";
+import { Conversation, Media, Message, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -17,7 +17,7 @@ if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { aut
 const app = express();
 app.use(helmet());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "4mb" }));
 
 const publicUser = (user) => ({
   id: user._id.toString(), username: user.username, email: user.email,
@@ -125,7 +125,9 @@ app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
   const filter = { conversation: req.params.id };
   if (req.query.after) filter.sentAt = { $gt: new Date(String(req.query.after)) };
   else filter.sentAt = { $lt: req.query.before ? new Date(String(req.query.before)) : new Date() };
-  const messages = await Message.find(filter).sort({ sentAt: req.query.after ? 1 : -1 }).limit(100).populate("sender", "username displayName avatarUrl");
+  const messages = await Message.find(filter).sort({ sentAt: req.query.after ? 1 : -1 }).limit(100)
+    .populate("sender", "username displayName avatarUrl")
+    .populate("attachment", "fileName mimeType size");
   res.json({ messages: req.query.after ? messages : messages.reverse() });
 });
 
@@ -142,6 +144,43 @@ app.post("/v1/conversations/:id/messages", auth, async (req, res) => {
   ).populate("sender", "username displayName avatarUrl");
   conversation.lastMessageAt = message.sentAt; await conversation.save();
   res.status(201).json({ message });
+});
+
+app.post("/v1/conversations/:id/attachments", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
+  if (!conversation) return res.sendStatus(404);
+  const clientId = String(req.body.clientId || "").trim();
+  const fileName = String(req.body.fileName || "attachment").trim().slice(0, 180);
+  const mimeType = String(req.body.mimeType || "application/octet-stream").trim().slice(0, 120);
+  const encoded = String(req.body.data || "");
+  if (!clientId || !encoded) return res.status(400).json({ error: "clientId and attachment data are required" });
+  const data = Buffer.from(encoded, "base64");
+  if (!data.length || data.length > 2621440) return res.status(413).json({ error: "Attachment must be 2.5 MB or smaller" });
+  const kind = mimeType.startsWith("image/") ? "image" : mimeType.startsWith("video/") ? "video" : mimeType.startsWith("audio/") ? "audio" : "file";
+  try {
+    const media = await Media.create({ conversation: conversation._id, uploader: req.auth.sub, fileName, mimeType, size: data.length, data });
+    const message = await Message.findOneAndUpdate(
+      { conversation: conversation._id, clientId },
+      { $setOnInsert: { sender: req.auth.sub, body: fileName, kind, attachment: media._id, sentAt: new Date() } },
+      { upsert: true, new: true }
+    ).populate("sender", "username displayName avatarUrl").populate("attachment", "fileName mimeType size");
+    conversation.lastMessageAt = message.sentAt; await conversation.save();
+    res.status(201).json({ message });
+  } catch (error) {
+    res.status(500).json({ error: "Could not upload attachment" });
+  }
+});
+
+app.get("/v1/attachments/:id", auth, async (req, res) => {
+  const media = await Media.findById(req.params.id).select("+data");
+  if (!media) return res.sendStatus(404);
+  const allowed = await Conversation.exists({ _id: media.conversation, members: req.auth.sub });
+  if (!allowed) return res.sendStatus(404);
+  const safeName = media.fileName.replace(/[\r\n"\\]/g, "_");
+  res.set("Content-Type", media.mimeType);
+  res.set("Content-Length", String(media.size));
+  res.set("Content-Disposition", `inline; filename="${safeName}"`);
+  res.send(media.data);
 });
 
 export default app;

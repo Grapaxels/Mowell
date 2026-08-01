@@ -20,9 +20,9 @@ class InternetTransport(context: Context) : MessageTransport {
         val session = auth.savedSession ?: return@withContext false
         if (auth.serverUrl.contains("example.invalid") || peer.isNullOrBlank()) return@withContext false
         runCatching {
-            val clientId = payload.substringBefore('|')
-            val body = payload.substringAfter('|', payload)
-            val json = JSONObject().put("clientId", clientId).put("body", body).put("kind", "text")
+            val json = runCatching { JSONObject(payload) }.getOrElse {
+                JSONObject().put("clientId", payload.substringBefore('|')).put("body", payload.substringAfter('|', payload)).put("kind", "text")
+            }
             client.newCall(Request.Builder().url("${auth.serverUrl}/v1/conversations/$peer/messages")
                 .header("Authorization", "Bearer ${session.token}")
                 .post(json.toString().toRequestBody(jsonType)).build()).execute().use { it.isSuccessful }
