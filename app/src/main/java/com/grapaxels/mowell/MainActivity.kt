@@ -23,6 +23,7 @@ import com.grapaxels.mowell.auth.AuthRepository
 import com.grapaxels.mowell.auth.AuthResult
 import com.grapaxels.mowell.auth.AuthSession
 import com.grapaxels.mowell.auth.UserProfile
+import com.grapaxels.mowell.call.CallCoordinator
 import com.grapaxels.mowell.data.CachedUser
 import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
@@ -48,7 +49,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.core.content.FileProvider
 
-data class CallSession(val conversationId: String, val name: String, val room: String, val video: Boolean)
+data class CallSession(val conversationId: String, val name: String, val room: String, val video: Boolean, val group: Boolean = false)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,7 +143,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val message = MessageEntity(id, conversationId, "You", body.trim(), now, true, "ROUTING", "sending", kind)
             dao.insertMessage(message)
             val existing = conversations.value.find { it.id == conversationId }
-            dao.upsertConversation(ConversationEntity(conversationId, existing?.title ?: "Conversation", preview(message), existing?.isGroup ?: false, now))
+            dao.upsertConversation(existing?.copy(subtitle = preview(message), updatedAt = now) ?: ConversationEntity(conversationId, "Conversation", preview(message), false, now))
             val payload = JSONObject().put("clientId", id).put("body", body.trim()).put("kind", kind).toString()
             val result = router.send(conversationId, selectedPeer, payload)
             dao.updateDelivery(id, if (result.delivered) "sent" else "stored", result.route.name)
@@ -165,7 +166,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val notify = initialSyncComplete
             remoteConversations.forEach { remote ->
                 val existing = conversations.value.find { it.id == remote.id }
-                dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt))
+                dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members))
                 syncConversationInternal(remote.id, remote.title, notify)
             }
             initialSyncComplete = true
@@ -183,21 +184,27 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 dao.insertMessage(message)
                 if (notify && !item.outgoing) notifier.show(title, message)
+                if (!item.outgoing && item.kind == "call_end") {
+                    runCatching { JSONObject(item.body).optString("room") }.getOrNull()?.takeIf { it.isNotBlank() }?.let { CallCoordinator.endIfActive(getApplication(), it) }
+                }
             }
             remote.maxOfOrNull { it.sentAt }?.let { syncCursors[conversationId] = maxOf(syncCursors[conversationId] ?: 0L, it) }
             remote.lastOrNull()?.let { last ->
                 val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, "sent", last.kind, last.attachmentId, last.attachmentMime, last.attachmentName)
                 val current = conversations.value.find { it.id == conversationId }
-                dao.upsertConversation(ConversationEntity(conversationId, current?.title ?: title, preview(message), current?.isGroup ?: false, last.sentAt))
+                dao.upsertConversation(current?.copy(subtitle = preview(message), updatedAt = last.sentAt) ?: ConversationEntity(conversationId, title, preview(message), false, last.sentAt))
             }
         }
     }
 
     fun createCall(conversationId: String, name: String, video: Boolean): CallSession {
         val room = "Mowell-${UUID.randomUUID().toString().replace("-", "")}"
-        sendTyped(conversationId, JSONObject().put("room", room).put("video", video).toString(), "call")
-        return CallSession(conversationId, name, room, video)
+        val group = conversations.value.find { it.id == conversationId }?.isGroup ?: false
+        sendTyped(conversationId, JSONObject().put("room", room).put("video", video).put("group", group).toString(), "call")
+        return CallSession(conversationId, name, room, video, group)
     }
+
+    fun launchCall(context: Context, session: CallSession) = CallCoordinator.launch(context, session)
 
     fun shareLocation(conversationId: String) {
         viewModelScope.launch {
@@ -238,10 +245,11 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val now = System.currentTimeMillis()
             dao.insertMessage(MessageEntity(id, conversationId, "You", name, now, true, "INTERNET", "uploading", kind, null, mime, name))
             val existing = conversations.value.find { it.id == conversationId }
-            dao.upsertConversation(ConversationEntity(conversationId, existing?.title ?: "Conversation", "Uploading $name", existing?.isGroup ?: false, now))
+            dao.upsertConversation(existing?.copy(subtitle = "Uploading $name", updatedAt = now) ?: ConversationEntity(conversationId, "Conversation", "Uploading $name", false, now))
             auth.uploadAttachment(conversationId, id, name, mime, bytes).onSuccess { item ->
                 dao.insertMessage(MessageEntity(item.id, conversationId, "You", item.body, item.sentAt, true, Route.INTERNET.name, "sent", item.kind, item.attachmentId, item.attachmentMime, item.attachmentName))
-                dao.upsertConversation(ConversationEntity(conversationId, existing?.title ?: "Conversation", preview(MessageEntity(item.id, conversationId, "You", item.body, item.sentAt, true, Route.INTERNET.name, "sent", item.kind)), existing?.isGroup ?: false, item.sentAt))
+                val attachmentPreview = preview(MessageEntity(item.id, conversationId, "You", item.body, item.sentAt, true, Route.INTERNET.name, "sent", item.kind))
+                dao.upsertConversation(existing?.copy(subtitle = attachmentPreview, updatedAt = item.sentAt) ?: ConversationEntity(conversationId, "Conversation", attachmentPreview, false, item.sentAt))
             }.onFailure { dao.updateDelivery(id, it.message ?: "upload failed", Route.LOCAL_ONLY.name) }
         }
     }
@@ -267,6 +275,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         "location" -> "Location"
         "contact" -> "Contact"
         "call" -> if (message.body.contains("\"video\":true")) "Video call" else "Voice call"
+        "call_end" -> "Call ended"
         else -> message.body
     }
 
@@ -304,7 +313,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     fun startChat(user: UserProfile, onReady: (String) -> Unit) {
         viewModelScope.launch {
             val conversationId = auth.createConversation(user.id).getOrElse { "user:${user.id}" }
-            dao.upsertConversation(ConversationEntity(conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis()))
+            dao.upsertConversation(ConversationEntity(conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis(), user.username, user.avatarUrl))
             onReady(conversationId)
         }
     }

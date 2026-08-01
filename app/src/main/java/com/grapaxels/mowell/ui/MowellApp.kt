@@ -103,6 +103,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grapaxels.mowell.MowellViewModel
 import com.grapaxels.mowell.CallSession
+import com.grapaxels.mowell.MowellMapActivity
+import com.grapaxels.mowell.mapHtml
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
@@ -251,12 +253,13 @@ private fun AuthScreen(vm: MowellViewModel) {
 
 @Composable
 private fun MainExperience(vm: MowellViewModel) {
+    val context = LocalContext.current
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
-    var call by remember { mutableStateOf<CallSession?>(null) }
+    var profile by remember { mutableStateOf<ConversationEntity?>(null) }
     when {
-        call != null -> CallScreen(call!!) { call = null }
-        openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { call = it })
+        profile != null -> ProfileScreen(profile!!, { profile = null })
+        openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
         else -> Scaffold(
             containerColor = Canvas,
             topBar = { ClayHeader(vm) },
@@ -274,7 +277,7 @@ private fun MainExperience(vm: MowellViewModel) {
             when (page) {
                 Page.CHATS -> ChatsScreen(vm, Modifier.padding(padding)) { openChat = it }
                 Page.PEOPLE -> PeopleScreen(vm, Modifier.padding(padding)) { user -> vm.startChat(user) { conversationId -> openChat = conversationId } }
-                Page.CALLS -> CallsScreen(vm, Modifier.padding(padding)) { call = it }
+                Page.CALLS -> CallsScreen(vm, Modifier.padding(padding)) { vm.launchCall(context, it) }
                 Page.NEARBY -> NearbyScreen(vm, Modifier.padding(padding))
                 Page.YOU -> SettingsScreen(vm, Modifier.padding(padding))
             }
@@ -419,9 +422,49 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
     }
 }
 
+@Composable
+private fun ProfileScreen(conversation: ConversationEntity, back: () -> Unit) {
+    Scaffold(containerColor = Canvas, topBar = {
+        Row(Modifier.fillMaxWidth().background(Canvas).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
+            Text(if (conversation.isGroup) "Group info" else "Profile", fontWeight = FontWeight.Black, fontSize = 20.sp)
+        }
+    }) { padding ->
+        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item {
+                Spacer(Modifier.height(12.dp))
+                Avatar(conversation.title, 116.dp, Violet)
+                Spacer(Modifier.height(14.dp))
+                Text(conversation.title, fontSize = 28.sp, fontWeight = FontWeight.Black)
+                if (!conversation.username.isNullOrBlank()) Text("@${conversation.username}", color = Violet, fontSize = 16.sp)
+                Text(if (conversation.isGroup) "Mowell group" else "Mowell contact", color = Muted)
+            }
+            item {
+                ClayCard(ClayWhite) {
+                    Text("About", fontWeight = FontWeight.Bold, color = Violet)
+                    Text(if (conversation.isGroup) "Private group conversation stored on this phone." else "Connected through Mowell. Messages are cached privately in SQLite on this phone.", color = Ink)
+                }
+            }
+            if (conversation.isGroup && conversation.members.isNotBlank()) item {
+                ClayCard(Lavender) {
+                    Text("Members", fontWeight = FontWeight.Bold, color = Violet)
+                    Text(conversation.members, color = Ink)
+                }
+            }
+            if (!conversation.isGroup) item {
+                ClayCard(Lavender) {
+                    Text("Activity", fontWeight = FontWeight.Bold, color = Violet)
+                    Text(if (conversation.lastSeenAt > 0) "Last seen ${SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault()).format(Date(conversation.lastSeenAt))}" else "Last seen information unavailable", color = Ink)
+                    Text("Internet and nearby messaging supported", color = Muted, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> Unit, call: (CallSession) -> Unit) {
+private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> Unit, call: (CallSession) -> Unit, profile: (ConversationEntity) -> Unit) {
     val messages by vm.messages(conversationId).collectAsStateWithLifecycle(initialValue = emptyList())
     val conversation = vm.conversations.collectAsStateWithLifecycle().value.find { it.id == conversationId }
     var text by remember { mutableStateOf("") }
@@ -438,8 +481,10 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
         topBar = {
             Row(Modifier.fillMaxWidth().background(Canvas).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
-                Avatar(conversation?.title ?: "M", 42.dp, Violet); Spacer(Modifier.width(9.dp))
-                Column(Modifier.weight(1f)) { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
+                Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(conversation?.title ?: "M", 42.dp, Violet); Spacer(Modifier.width(9.dp))
+                    Column { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
+                }
                 IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
                 IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
             }
@@ -461,14 +506,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             items(messages, key = { it.id }) { message ->
-                MessageClay(message, openAttachment = { vm.openAttachment(context, message) }, joinCall = { room, video -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video)) })
+                MessageClay(message, openAttachment = { vm.openAttachment(context, message) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group)) })
             }
         }
     }
 }
 
 @Composable
-private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, joinCall: (String, Boolean) -> Unit) {
+private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
         Box(Modifier.fillMaxWidth(.80f).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(12.dp)) {
@@ -485,7 +530,20 @@ private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, join
                         val lat = data?.optDouble("latitude") ?: 0.0
                         val lon = data?.optDouble("longitude") ?: 0.0
                         Text("Location shared", color = foreground, fontWeight = FontWeight.Bold)
-                        Text("Open in Maps", color = if (message.outgoing) Lime else Violet, modifier = Modifier.clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:$lat,$lon?q=$lat,$lon"))) })
+                        Box(Modifier.fillMaxWidth().height(145.dp).clip(RoundedCornerShape(14.dp))) {
+                            AndroidView(modifier = Modifier.fillMaxSize(), factory = { webContext ->
+                                WebView(webContext).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    webViewClient = WebViewClient()
+                                    loadDataWithBaseURL("https://www.openstreetmap.org", mapHtml(lat, lon, false), "text/html", "UTF-8", null)
+                                }
+                            })
+                            Box(Modifier.fillMaxSize().clickable {
+                                context.startActivity(Intent(context, MowellMapActivity::class.java).putExtra("latitude", lat).putExtra("longitude", lon))
+                            })
+                        }
+                        Text("Tap map to open inside Mowell", color = if (message.outgoing) Lime else Violet, fontSize = 11.sp)
                     }
                     "contact" -> {
                         val data = runCatching { JSONObject(message.body) }.getOrNull()
@@ -495,41 +553,16 @@ private fun MessageClay(message: MessageEntity, openAttachment: () -> Unit, join
                     "call" -> {
                         val data = runCatching { JSONObject(message.body) }.getOrNull()
                         val video = data?.optBoolean("video") ?: false
+                        val group = data?.optBoolean("group") ?: false
                         Text(if (video) "Video call" else "Voice call", color = foreground, fontWeight = FontWeight.Bold)
-                        Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
+                        Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video, group) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
                     }
+                    "call_end" -> Text("Call ended", color = foreground, fontWeight = FontWeight.Bold)
                     else -> Text(message.body, color = foreground)
                 }
                 Row(Modifier.align(Alignment.End)) { Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .7f) else Muted, fontSize = 9.sp); Spacer(Modifier.width(5.dp)); Text(route(message.route), color = if (message.outgoing) Lime else Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
             }
         }
-    }
-}
-
-@Composable
-private fun CallScreen(session: CallSession, end: () -> Unit) {
-    val url = "https://meet.jit.si/${session.room}#config.prejoinPageEnabled=false&config.startWithVideoMuted=${!session.video}&config.startWithAudioMuted=false"
-    var webView by remember { mutableStateOf<WebView?>(null) }
-    BackHandler(onBack = end)
-    DisposableEffect(Unit) { onDispose { webView?.destroy() } }
-    Box(Modifier.fillMaxSize().background(Ink)) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                WebView(context).apply {
-                    webView = this
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    webViewClient = WebViewClient()
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onPermissionRequest(request: PermissionRequest) { request.grant(request.resources) }
-                    }
-                    loadUrl(url)
-                }
-            }
-        )
-        IconButton(onClick = end, Modifier.align(Alignment.TopEnd).padding(16.dp).size(58.dp).clip(CircleShape).background(Color(0xFFE34855))) { Icon(Icons.Rounded.CallEnd, "End", tint = Color.White) }
     }
 }
 

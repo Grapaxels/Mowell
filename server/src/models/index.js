@@ -24,7 +24,7 @@ const messageSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   body: { type: String, required: true, maxlength: 8000 },
-  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "call", "system"], default: "text" },
+  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "call", "call_end", "system"], default: "text" },
   attachment: { type: mongoose.Schema.Types.ObjectId, ref: "Media" },
   sentAt: { type: Date, default: Date.now }
 }, { timestamps: true });

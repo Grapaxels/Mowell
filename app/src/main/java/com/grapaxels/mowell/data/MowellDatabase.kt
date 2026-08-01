@@ -9,7 +9,7 @@ class MowellDatabase private constructor(context: Context) {
     private val mowellDao by lazy { MowellDao { helper.writableDatabase } }
     fun dao(): MowellDao = mowellDao
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 3) {
+    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 4) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""
                 CREATE TABLE conversations (
@@ -17,7 +17,11 @@ class MowellDatabase private constructor(context: Context) {
                     title TEXT NOT NULL,
                     subtitle TEXT NOT NULL,
                     isGroup INTEGER NOT NULL,
-                    updatedAt INTEGER NOT NULL
+                    updatedAt INTEGER NOT NULL,
+                    username TEXT,
+                    avatarUrl TEXT,
+                    lastSeenAt INTEGER NOT NULL DEFAULT 0,
+                    members TEXT NOT NULL DEFAULT ''
                 )
             """.trimIndent())
             db.execSQL("""
@@ -47,6 +51,12 @@ class MowellDatabase private constructor(context: Context) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN attachmentId TEXT")
                 db.execSQL("ALTER TABLE messages ADD COLUMN attachmentMime TEXT")
                 db.execSQL("ALTER TABLE messages ADD COLUMN attachmentName TEXT")
+            }
+            if (oldVersion < 4) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN username TEXT")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN avatarUrl TEXT")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN lastSeenAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN members TEXT NOT NULL DEFAULT ''")
             }
         }
 

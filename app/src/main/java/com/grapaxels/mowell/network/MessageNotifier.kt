@@ -33,6 +33,7 @@ class MessageNotifier(private val context: Context) {
         val call = message.kind == "call"
         val preview = when (message.kind) {
             "call" -> "Incoming ${if (message.body.contains("\"video\":true")) "video" else "voice"} call"
+            "call_end" -> "Call ended"
             "image" -> "Sent a photo"
             "video" -> "Sent a video"
             "audio" -> "Sent audio"

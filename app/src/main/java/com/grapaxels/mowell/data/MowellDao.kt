@@ -30,6 +30,10 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("subtitle", conversation.subtitle)
             put("isGroup", if (conversation.isGroup) 1 else 0)
             put("updatedAt", conversation.updatedAt)
+            put("username", conversation.username)
+            put("avatarUrl", conversation.avatarUrl)
+            put("lastSeenAt", conversation.lastSeenAt)
+            put("members", conversation.members)
         }
         db().insertWithOnConflict("conversations", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         conversations.value = loadConversations()
@@ -103,7 +107,11 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
                 cursor.getString(cursor.getColumnIndexOrThrow("title")),
                 cursor.getString(cursor.getColumnIndexOrThrow("subtitle")),
                 cursor.getInt(cursor.getColumnIndexOrThrow("isGroup")) == 1,
-                cursor.getLong(cursor.getColumnIndexOrThrow("updatedAt"))
+                cursor.getLong(cursor.getColumnIndexOrThrow("updatedAt")),
+                cursor.getString(cursor.getColumnIndexOrThrow("username")),
+                cursor.getString(cursor.getColumnIndexOrThrow("avatarUrl")),
+                cursor.getLong(cursor.getColumnIndexOrThrow("lastSeenAt")),
+                cursor.getString(cursor.getColumnIndexOrThrow("members"))
             ))
         }
     }

@@ -20,7 +20,11 @@ data class UserProfile(
 
 data class AuthSession(val token: String, val user: UserProfile)
 data class AuthResult(val session: AuthSession? = null, val error: String? = null)
-data class RemoteConversation(val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long)
+data class RemoteConversation(
+    val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
+    val username: String? = null, val avatarUrl: String? = null,
+    val lastSeenAt: Long = 0L, val members: String = ""
+)
 data class RemoteMessage(
     val id: String, val conversationId: String, val sender: String, val body: String,
     val sentAt: Long, val outgoing: Boolean, val kind: String = "text",
@@ -99,15 +103,25 @@ class AuthRepository(context: Context) {
                         val isGroup = item.optBoolean("isGroup")
                         val members = item.optJSONArray("members")
                         var directName = "Mowell user"
+                        var directUsername: String? = null
+                        var directAvatar: String? = null
+                        var directLastSeen = 0L
+                        val memberNames = mutableListOf<String>()
                         if (members != null) for (memberIndex in 0 until members.length()) {
                             val member = members.optJSONObject(memberIndex) ?: continue
                             if (member.optString("_id") != session.user.id) {
-                                directName = member.optString("displayName", member.optString("username", directName))
-                                break
+                                val memberName = member.optString("displayName", member.optString("username", directName))
+                                memberNames += memberName
+                                if (directUsername == null) {
+                                    directName = memberName
+                                    directUsername = member.optString("username").takeIf { it.isNotBlank() }
+                                    directAvatar = member.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" }
+                                    directLastSeen = parseDate(member.optString("lastSeenAt"))
+                                }
                             }
                         }
                         val title = if (isGroup) item.optString("title").ifBlank { "Mowell group" } else directName
-                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt"))))
+                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt")), directUsername, directAvatar, directLastSeen, memberNames.joinToString(", ")))
                     }
                 }
             }
@@ -176,11 +190,14 @@ class AuthRepository(context: Context) {
         timeZone = java.util.TimeZone.getTimeZone("UTC")
     }.format(java.util.Date(value))
 
-    private fun parseDate(value: String): Long = runCatching {
+    private fun parseDate(value: String): Long {
+        if (value.isBlank() || value == "null") return 0L
+        return runCatching {
         java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
             timeZone = java.util.TimeZone.getTimeZone("UTC")
         }.parse(value)?.time ?: System.currentTimeMillis()
-    }.getOrDefault(System.currentTimeMillis())
+        }.getOrDefault(0L)
+    }
 
     private suspend fun postAuth(path: String, body: JSONObject): AuthResult = withContext(Dispatchers.IO) {
         try {

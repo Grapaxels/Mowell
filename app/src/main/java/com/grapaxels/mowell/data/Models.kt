@@ -20,7 +20,11 @@ data class ConversationEntity(
     val title: String,
     val subtitle: String,
     val isGroup: Boolean,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val username: String? = null,
+    val avatarUrl: String? = null,
+    val lastSeenAt: Long = 0L,
+    val members: String = ""
 )
 
 data class CachedUser(
