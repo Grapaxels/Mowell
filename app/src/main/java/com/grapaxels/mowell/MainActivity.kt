@@ -18,12 +18,12 @@ import android.os.Bundle
 import android.provider.ContactsContract
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
+import androidx.activity.viewModels
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
 import com.grapaxels.mowell.auth.AuthRepository
 import com.grapaxels.mowell.auth.AuthResult
@@ -72,10 +72,12 @@ data class CallSession(
 )
 
 class MainActivity : ComponentActivity() {
+    private val mowellViewModel: MowellViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val vm: MowellViewModel = viewModel()
+            val vm = mowellViewModel
             val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                 if (result.values.any { it }) vm.bluetooth.startListening()
             }
@@ -96,6 +98,18 @@ class MainActivity : ComponentActivity() {
             }
             MowellApp(vm)
         }
+        if (intent.getBooleanExtra("show_update", false)) mowellViewModel.checkForUpdates(showPopup = true)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra("show_update", false)) mowellViewModel.checkForUpdates(showPopup = true)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        mowellViewModel.resumeUpdateInstall(this)
     }
 }
 
@@ -646,8 +660,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private fun passcodeHash(conversationId: String, passcode: String, salt: String) =
         MessageDigest.getInstance("SHA-256").digest("$conversationId:$salt:$passcode".toByteArray()).joinToString("") { "%02x".format(it) }
     fun dismissUpdate() { _showUpdatePopup.value = false }
-    fun checkForUpdates() { viewModelScope.launch { refreshUpdate(showPopup = false) } }
+    fun checkForUpdates() = checkForUpdates(showPopup = false)
+    fun checkForUpdates(showPopup: Boolean) { viewModelScope.launch { refreshUpdate(showPopup) } }
     fun installUpdate(activity: Activity) { _update.value?.let { updater.downloadAndInstall(activity, it) } }
+    fun resumeUpdateInstall(activity: Activity) = updater.resumePendingInstall(activity)
 
     private suspend fun refreshUpdate(showPopup: Boolean) {
         _updateStatus.value = "Checking for updates…"

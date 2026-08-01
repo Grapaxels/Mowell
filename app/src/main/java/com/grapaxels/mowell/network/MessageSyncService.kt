@@ -38,15 +38,22 @@ class MessageSyncService : Service() {
     private val scope = CoroutineScope(serviceJob + Dispatchers.IO)
     private lateinit var auth: AuthRepository
     private lateinit var notifier: MessageNotifier
+    private lateinit var updater: AppUpdater
+    private var nextUpdateCheckAt = 0L
 
     override fun onCreate() {
         super.onCreate()
         auth = AuthRepository(this)
         notifier = MessageNotifier(this)
+        updater = AppUpdater(this, auth)
         startForeground(SERVICE_NOTIFICATION_ID, serviceNotification())
         scope.launch {
             while (isActive) {
                 runCatching { syncMessages() }
+                if (System.currentTimeMillis() >= nextUpdateCheckAt) {
+                    runCatching { checkForUpdate() }
+                    nextUpdateCheckAt = System.currentTimeMillis() + 30 * 60 * 1000L
+                }
                 delay(2_000)
             }
         }
@@ -68,13 +75,19 @@ class MessageSyncService : Service() {
     }
 
     private suspend fun syncMessages() {
-        if (auth.savedSession == null) return
+        val session = auth.savedSession ?: return
         val dao = (application as MowellApplication).database.dao()
         val remoteConversations = auth.fetchConversations().getOrNull() ?: return
         dao.retainSyncedConversations(remoteConversations.map { it.id }.toSet())
         val hidden = getSharedPreferences("mowell_hidden_messages", Context.MODE_PRIVATE)
 
         remoteConversations.forEach remoteLoop@ { remote ->
+            val syncState = getSharedPreferences("mowell_notification_watermarks", Context.MODE_PRIVATE)
+            val watermarkKey = "${session.user.id}:${remote.id}"
+            val notificationFloor = if (syncState.contains(watermarkKey)) syncState.getLong(watermarkKey, 0L) else System.currentTimeMillis().also {
+                syncState.edit().putLong(watermarkKey, it).apply()
+            }
+            var latestIncomingTime = notificationFloor
             val existing = dao.getConversation(remote.id)
             dao.upsertConversation(ConversationEntity(
                 remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup,
@@ -85,6 +98,7 @@ class MessageSyncService : Service() {
             val newIncoming = mutableListOf<MessageEntity>()
             fetched.forEach messageLoop@ { item ->
                 if (hidden.getStringSet(item.conversationId, emptySet()).orEmpty().contains(item.id)) return@messageLoop
+                if (!item.outgoing) latestIncomingTime = maxOf(latestIncomingTime, item.sentAt)
                 if (dao.hasMessage(item.id)) return@messageLoop
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
@@ -92,8 +106,9 @@ class MessageSyncService : Service() {
                     item.attachmentId, item.attachmentMime, item.attachmentName
                 )
                 dao.insertMessage(message)
-                if (!item.outgoing) newIncoming += message
+                if (!item.outgoing && item.sentAt > notificationFloor) newIncoming += message
             }
+            if (latestIncomingTime > notificationFloor) syncState.edit().putLong(watermarkKey, latestIncomingTime).apply()
             fetched.lastOrNull()?.let { last ->
                 val current = dao.getConversation(remote.id)
                 dao.upsertConversation((current ?: ConversationEntity(remote.id, remote.title, "", remote.isGroup, last.sentAt)).copy(
@@ -109,6 +124,14 @@ class MessageSyncService : Service() {
                 else notifier.show(remote.title, latest, unread.coerceAtLeast(1), remote.avatarUrl)
             }
         }
+    }
+
+    private suspend fun checkForUpdate() {
+        val update = updater.check() ?: return
+        val state = getSharedPreferences("mowell_update_notifications", Context.MODE_PRIVATE)
+        if (state.getInt("notified_version", 0) >= update.versionCode) return
+        notifier.showUpdateAvailable(update.versionName)
+        state.edit().putInt("notified_version", update.versionCode).apply()
     }
 
     private fun preview(kind: String, body: String, attachmentName: String?): String = when (kind) {

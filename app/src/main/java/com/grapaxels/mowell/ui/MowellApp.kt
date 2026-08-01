@@ -879,6 +879,11 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                         else Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video, group) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
                     }
                     "call_end" -> Text("Call ended", color = foreground, fontWeight = FontWeight.Bold)
+                    "system" -> Text(
+                        message.body,
+                        color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted,
+                        fontStyle = if (message.body == "This message was deleted") FontStyle.Italic else FontStyle.Normal
+                    )
                     else -> Text(message.body, color = foreground)
                 }
                 Row(Modifier.align(Alignment.End)) { Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .7f) else Muted, fontSize = 9.sp); Spacer(Modifier.width(5.dp)); Text(route(message.route), color = if (message.outgoing) Lime else Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold) }

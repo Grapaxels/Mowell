@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
@@ -125,5 +126,33 @@ class MessageNotifier(private val context: Context) {
     fun clearAll() {
         NotificationManagerCompat.from(context).cancelAll()
         notificationPrefs.edit().clear().apply()
+    }
+
+    fun showUpdateAvailable(versionName: String) {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val channelId = "mowell_updates_v1"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(channelId, "App updates", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Mowell update availability"
+                setSound(Settings.System.DEFAULT_NOTIFICATION_URI, AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            }
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("show_update", true)
+        }
+        val pending = PendingIntent.getActivity(context, 42001, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_mowell)
+            .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.drawable.mowell_logo))
+            .setContentTitle("Mowell $versionName is available")
+            .setContentText("Tap to update securely inside Mowell")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pending)
+            .build()
+        NotificationManagerCompat.from(context).notify(42001, notification)
     }
 }

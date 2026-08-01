@@ -24,6 +24,7 @@ data class UpdateInfo(val versionCode: Int, val versionName: String, val apkUrl:
 
 class AppUpdater(private val context: Context, private val auth: AuthRepository) {
     private val client = OkHttpClient()
+    private val state = context.getSharedPreferences("mowell_update_state", Context.MODE_PRIVATE)
 
     suspend fun check(): UpdateInfo? = withContext(Dispatchers.IO) {
         try {
@@ -47,11 +48,13 @@ class AppUpdater(private val context: Context, private val auth: AuthRepository)
             }
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
-            activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+        val updateFile = File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Mowell-update.apk")
+        if (state.getBoolean("pending_install", false) && updateFile.exists()) {
+            openInstallerOrPermission(activity, updateFile)
             return
         }
-        File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Mowell-update.apk").delete()
+        state.edit().remove("pending_install").apply()
+        updateFile.delete()
         val manager = activity.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val request = DownloadManager.Request(Uri.parse(update.apkUrl))
             .setTitle("Mowell ${update.versionName}")
@@ -69,14 +72,33 @@ class AppUpdater(private val context: Context, private val auth: AuthRepository)
                     val actual = java.security.MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
                     if (!actual.equals(update.sha256, ignoreCase = true)) { file.delete(); return }
                 }
-                val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.files", file)
-                activity.startActivity(Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
+                state.edit().putBoolean("pending_install", true).apply()
+                openInstallerOrPermission(activity, file)
             }
         }
         if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_NOT_EXPORTED)
         else @Suppress("DEPRECATION") activity.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
+    }
+
+    fun resumePendingInstall(activity: Activity) {
+        if (!BuildConfig.SELF_UPDATE || !state.getBoolean("pending_install", false)) return
+        val file = File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Mowell-update.apk")
+        if (!file.exists()) { state.edit().remove("pending_install").apply(); return }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || activity.packageManager.canRequestPackageInstalls()) {
+            openInstallerOrPermission(activity, file)
+        }
+    }
+
+    private fun openInstallerOrPermission(activity: Activity, file: File) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
+            activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+            return
+        }
+        state.edit().remove("pending_install").apply()
+        val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.files", file)
+        activity.startActivity(Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
     }
 }

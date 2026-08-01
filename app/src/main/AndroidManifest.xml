@@ -33,6 +33,7 @@
         android:theme="@style/Theme.Mowell">
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
