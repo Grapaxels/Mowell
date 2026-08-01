@@ -155,4 +155,55 @@ class MessageNotifier(private val context: Context) {
             .build()
         NotificationManagerCompat.from(context).notify(42001, notification)
     }
+
+    fun showConnectionRequest(requestId: String, displayName: String, username: String) {
+        showApproval(
+            requestId, "New connection request", "$displayName (@$username) wants to connect",
+            NotificationActionReceiver.ACTION_ACCEPT_CONNECTION,
+            NotificationActionReceiver.ACTION_DECLINE_CONNECTION,
+            NotificationActionReceiver.EXTRA_REQUEST,
+            "Accept"
+        )
+    }
+
+    fun showGroupInvitation(invitationId: String, groupTitle: String, inviterName: String) {
+        showApproval(
+            invitationId, "Group invitation", "$inviterName invited you to $groupTitle",
+            NotificationActionReceiver.ACTION_ACCEPT_GROUP,
+            NotificationActionReceiver.ACTION_DECLINE_GROUP,
+            NotificationActionReceiver.EXTRA_INVITATION,
+            "Join"
+        )
+    }
+
+    private fun showApproval(id: String, title: String, body: String, acceptAction: String, declineAction: String, extraKey: String, acceptLabel: String) {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val channelId = "mowell_requests_v1"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(channelId, "Connection and group requests", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Requests that need your approval"
+                enableVibration(true)
+                setSound(Settings.System.DEFAULT_NOTIFICATION_URI, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            }
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+        val notificationId = id.hashCode()
+        fun actionIntent(action: String, offset: Int) = PendingIntent.getBroadcast(
+            context, notificationId + offset,
+            Intent(context, NotificationActionReceiver::class.java).apply { this.action = action; putExtra(extraKey, id); putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION, notificationId) },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val open = PendingIntent.getActivity(context, notificationId, Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_mowell).setLargeIcon(BitmapFactory.decodeResource(context.resources, R.drawable.mowell_logo))
+            .setContentTitle(title).setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .setAutoCancel(true).setContentIntent(open)
+            .addAction(0, "Decline", actionIntent(declineAction, 1))
+            .addAction(0, acceptLabel, actionIntent(acceptAction, 2))
+            .build()
+        NotificationManagerCompat.from(context).notify(notificationId, notification)
+    }
 }

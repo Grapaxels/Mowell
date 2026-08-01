@@ -43,6 +43,14 @@ class NotificationActionReceiver : BroadcastReceiver() {
                                 .header("Authorization", "Bearer $token").post(body.toRequestBody("application/json".toMediaType())).build()).execute().close()
                         }
                     }
+                    ACTION_ACCEPT_CONNECTION, ACTION_DECLINE_CONNECTION -> {
+                        val requestId = intent.getStringExtra(EXTRA_REQUEST).orEmpty()
+                        if (requestId.isNotBlank()) AuthRepository(app).respondConnectionRequest(requestId, intent.action == ACTION_ACCEPT_CONNECTION)
+                    }
+                    ACTION_ACCEPT_GROUP, ACTION_DECLINE_GROUP -> {
+                        val invitationId = intent.getStringExtra(EXTRA_INVITATION).orEmpty()
+                        if (invitationId.isNotBlank()) AuthRepository(app).respondGroupInvitation(invitationId, intent.action == ACTION_ACCEPT_GROUP)
+                    }
                 }
                 intent.getIntExtra(EXTRA_NOTIFICATION, 0).takeIf { it != 0 }?.let {
                     (app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(it)
@@ -54,9 +62,15 @@ class NotificationActionReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_REPLY = "com.grapaxels.mowell.REPLY"
         const val ACTION_DECLINE = "com.grapaxels.mowell.DECLINE_CALL"
+        const val ACTION_ACCEPT_CONNECTION = "com.grapaxels.mowell.ACCEPT_CONNECTION"
+        const val ACTION_DECLINE_CONNECTION = "com.grapaxels.mowell.DECLINE_CONNECTION"
+        const val ACTION_ACCEPT_GROUP = "com.grapaxels.mowell.ACCEPT_GROUP"
+        const val ACTION_DECLINE_GROUP = "com.grapaxels.mowell.DECLINE_GROUP"
         const val KEY_REPLY = "mowell_reply"
         const val EXTRA_CONVERSATION = "conversation"
         const val EXTRA_ROOM = "room"
         const val EXTRA_NOTIFICATION = "notification_id"
+        const val EXTRA_REQUEST = "connection_request_id"
+        const val EXTRA_INVITATION = "group_invitation_id"
     }
 }

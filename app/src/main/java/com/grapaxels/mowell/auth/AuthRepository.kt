@@ -19,6 +19,10 @@ data class UserProfile(
 )
 
 data class AuthSession(val token: String, val user: UserProfile)
+data class ConnectionRequest(val id: String, val direction: String, val user: UserProfile)
+data class GroupInvitation(val id: String, val groupId: String, val groupTitle: String, val inviter: UserProfile)
+data class GroupMember(val user: UserProfile, val isAdmin: Boolean, val isCreator: Boolean)
+data class GroupMemberState(val members: List<GroupMember>, val creatorId: String, val viewerIsAdmin: Boolean)
 data class AuthResult(val session: AuthSession? = null, val error: String? = null, val verificationEmail: String? = null)
 data class RemoteConversation(
     val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
@@ -162,6 +166,131 @@ class AuthRepository(context: Context) {
             if (!response.isSuccessful) error(json.optString("error", "Search failed"))
             val array = json.optJSONArray("users") ?: return@runCatching emptyList()
             buildList { for (index in 0 until array.length()) add(parseUser(array.getJSONObject(index))) }
+        }
+    }
+
+    suspend fun fetchConnections(): Result<List<UserProfile>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/contacts")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not load connections"))
+            val array = json.optJSONArray("users") ?: return@runCatching emptyList()
+            buildList { for (index in 0 until array.length()) add(parseUser(array.getJSONObject(index))) }
+        }
+    }
+
+    suspend fun fetchConnectionRequests(): Result<List<ConnectionRequest>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/contacts/requests")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not load connection requests"))
+            val array = json.optJSONArray("requests") ?: return@runCatching emptyList()
+            buildList { for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                add(ConnectionRequest(item.getString("_id"), item.getString("direction"), parseUser(item.getJSONObject("user"))))
+            } }
+        }
+    }
+
+    suspend fun sendConnectionRequest(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("userId", userId)
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/contacts/requests")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not send connection request"))
+        }
+    }
+
+    suspend fun respondConnectionRequest(requestId: String, accept: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val builder = Request.Builder().url("$serverUrl/v1/contacts/requests/$requestId")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
+            val response = client.newCall(if (accept) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not update connection request"))
+        }
+    }
+
+    suspend fun fetchGroupInvitations(): Result<List<GroupInvitation>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/groups/invitations")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not load group invitations"))
+            val array = json.optJSONArray("invitations") ?: return@runCatching emptyList()
+            buildList { for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                add(GroupInvitation(item.getString("_id"), item.getString("groupId"), item.getString("groupTitle"), parseUser(item.getJSONObject("inviter"))))
+            } }
+        }
+    }
+
+    suspend fun respondGroupInvitation(invitationId: String, accept: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val builder = Request.Builder().url("$serverUrl/v1/groups/invitations/$invitationId")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
+            val response = client.newCall(if (accept) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not update group invitation"))
+        }
+    }
+
+    suspend fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("title", title.trim()).put("isGroup", true)
+                .put("memberIds", org.json.JSONArray(memberIds.toList())).put("inviteIds", org.json.JSONArray(inviteIds.toList()))
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not create group"))
+            json.getJSONObject("conversation").getString("_id")
+        }
+    }
+
+    suspend fun addGroupMembers(conversationId: String, memberIds: Set<String>, inviteIds: Set<String>): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("memberIds", org.json.JSONArray(memberIds.toList())).put("inviteIds", org.json.JSONArray(inviteIds.toList()))
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/members")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not add group members"))
+        }
+    }
+
+    suspend fun fetchGroupMembers(conversationId: String): Result<GroupMemberState> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/members")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not load group members"))
+            val array = json.optJSONArray("members")
+            val members = buildList { if (array != null) for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                add(GroupMember(parseUser(item), item.optBoolean("isAdmin"), item.optBoolean("isCreator")))
+            } }
+            GroupMemberState(members, json.optString("creatorId"), json.optBoolean("viewerIsAdmin"))
+        }
+    }
+
+    suspend fun setGroupAdmin(conversationId: String, userId: String, admin: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val builder = Request.Builder().url("$serverUrl/v1/conversations/$conversationId/admins/$userId")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
+            val response = client.newCall(if (admin) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not change admin role"))
+        }
+    }
+
+    suspend fun removeGroupMember(conversationId: String, userId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/members/$userId")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").delete().build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not remove group member"))
         }
     }
 

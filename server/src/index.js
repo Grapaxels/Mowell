@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { CallRoom, CallSignal, Contact, Conversation, Media, Message, TypingState, User } from "./models/index.js";
+import { CallRoom, CallSignal, Contact, Conversation, GroupInvitation, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -19,6 +19,7 @@ if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET is required");
 if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must contain at least 32 characters");
 
 if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { autoIndex: true });
+await Contact.updateMany({ status: { $exists: false } }, { $set: { status: "accepted" } });
 const app = express();
 app.use(helmet());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
@@ -29,6 +30,10 @@ const publicUser = (user) => ({
   displayName: user.displayName, avatarUrl: user.avatarUrl || null, lastSeenAt: user.lastSeenAt,
   emailVerified: Boolean(user.emailVerified)
 });
+const directoryUser = (user) => ({
+  id: user._id.toString(), username: user.username, displayName: user.displayName,
+  avatarUrl: user.avatarUrl || null, lastSeenAt: user.lastSeenAt
+});
 // Mobile sessions intentionally persist until the user chooses Log out.
 // Rotate JWT_SECRET to revoke all sessions after a security incident.
 const issueToken = (user) => jwt.sign({ sub: user._id.toString(), username: user.username }, process.env.JWT_SECRET, { issuer: "mowell-api" });
@@ -36,11 +41,17 @@ const usernamePattern = /^[a-z0-9_]{3,24}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const contactPair = (first, second) => [String(first), String(second)].sort().join(":");
+const isGroupAdmin = (conversation, userId) => conversation.createdBy.toString() === String(userId)
+  || (conversation.admins || []).some((id) => id.toString() === String(userId));
 const directContact = async (conversation) => {
   if (!conversation || conversation.isGroup || conversation.members.length !== 2) return null;
   return Contact.findOne({ pairKey: contactPair(conversation.members[0], conversation.members[1]) });
 };
-const directMessagingBlocked = async (conversation) => Boolean((await directContact(conversation))?.blockedBy?.length);
+const directMessagingBlocked = async (conversation) => {
+  if (!conversation || conversation.isGroup) return false;
+  const contact = await directContact(conversation);
+  return !contact || contact.status !== "accepted" || Boolean(contact.blockedBy?.length);
+};
 const disposableDomains = new Set([
   "10minutemail.com", "guerrillamail.com", "guerrillamailblock.com", "mailinator.com", "temp-mail.org",
   "tempmail.com", "throwawaymail.com", "yopmail.com", "sharklasers.com", "getnada.com", "dispostable.com",
@@ -107,10 +118,10 @@ const sendVerification = async (user, force = false) => {
   user.verificationAttempts = 0;
   const smtp = smtpSettings();
   await mailer().sendMail({
-    from: process.env.SMTP_FROM || `Mowell by Grapaxels <${smtp.user}>`, to: user.email,
+    from: process.env.SMTP_FROM || `Mowell from Grapaxels <${smtp.user}>`, to: user.email,
     subject: `${code} is your Mowell verification code`,
     text: `Your Mowell verification code is ${code}. It expires in 10 minutes. If you did not request this, ignore this email.`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h1 style="margin:0">Mowell</h1><p style="color:#7357f6">by Grapaxels</p><p>Use this code to verify your email:</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;background:#ede8ff;border-radius:16px;text-align:center">${code}</div><p>This code expires in 10 minutes.</p></div>`
+    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h1 style="margin:0">Mowell</h1><p style="color:#7357f6">from Grapaxels</p><p>Use this code to verify your email:</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;background:#ede8ff;border-radius:16px;text-align:center">${code}</div><p>This code expires in 10 minutes.</p></div>`
   });
   await user.save();
 };
@@ -121,11 +132,11 @@ const sendPasswordReset = async (user) => {
   user.passwordResetAttempts = 0;
   const smtp = smtpSettings();
   await mailer().sendMail({
-    from: process.env.SMTP_FROM || `Mowell by Grapaxels <${smtp.user}>`,
+    from: process.env.SMTP_FROM || `Mowell from Grapaxels <${smtp.user}>`,
     to: user.email,
     subject: `${code} is your Mowell password reset code`,
     text: `Your Mowell password reset code is ${code}. It expires in 10 minutes. If you did not request this, ignore this email.`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h1 style="margin:0">Mowell</h1><p style="color:#7357f6">by Grapaxels</p><p>Use this code to reset your password:</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;background:#ede8ff;border-radius:16px;text-align:center">${code}</div><p>This code expires in 10 minutes.</p></div>`
+    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h1 style="margin:0">Mowell</h1><p style="color:#7357f6">from Grapaxels</p><p>Use this code to reset your password:</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;background:#ede8ff;border-radius:16px;text-align:center">${code}</div><p>This code expires in 10 minutes.</p></div>`
   });
   await user.save();
 };
@@ -328,11 +339,95 @@ app.get("/v1/users/search", auth, async (req, res) => {
   const query = String(req.query.q || "").trim().toLowerCase().slice(0, 40);
   if (query.length < 2) return res.json({ users: [] });
   const users = await User.find({ _id: { $ne: req.auth.sub }, username: { $regex: `^${escapeRegex(query)}`, $options: "i" } }).limit(20);
-  res.json({ users: users.map(publicUser) });
+  res.json({ users: users.map(directoryUser) });
+});
+
+app.get("/v1/contacts", auth, async (req, res) => {
+  const contacts = await Contact.find({ users: req.auth.sub, status: "accepted" }).populate("users", "username email displayName avatarUrl lastSeenAt");
+  const users = contacts.flatMap((contact) => contact.users.filter((user) => user._id.toString() !== req.auth.sub).map(directoryUser));
+  res.json({ users });
+});
+
+app.get("/v1/contacts/requests", auth, async (req, res) => {
+  const contacts = await Contact.find({ users: req.auth.sub, status: "pending" })
+    .populate("users", "username email displayName avatarUrl lastSeenAt").sort({ createdAt: -1 });
+  const requests = contacts.map((contact) => ({
+    _id: contact._id.toString(),
+    direction: contact.addedBy.toString() === req.auth.sub ? "outgoing" : "incoming",
+    user: directoryUser(contact.users.find((user) => user._id.toString() !== req.auth.sub))
+  }));
+  res.json({ requests });
+});
+
+app.post("/v1/contacts/requests", auth, async (req, res) => {
+  const requestedId = String(req.body.userId || "");
+  if (!mongoose.isValidObjectId(requestedId) || requestedId === req.auth.sub) return res.status(400).json({ error: "Choose another Mowell user" });
+  const requested = await User.findById(requestedId);
+  if (!requested) return res.status(404).json({ error: "User not found" });
+  const pairKey = contactPair(req.auth.sub, requestedId);
+  const existing = await Contact.findOne({ pairKey });
+  if (existing?.status === "accepted") return res.status(409).json({ error: "You are already connected" });
+  if (existing?.status === "pending") {
+    const incoming = existing.addedBy.toString() !== req.auth.sub;
+    return res.status(409).json({ error: incoming ? "This person already sent you a request. Accept it from People" : "Connection request already sent" });
+  }
+  const request = await Contact.findOneAndUpdate(
+    { pairKey },
+    { $set: { users: [req.auth.sub, requestedId], addedBy: req.auth.sub, status: "pending", blockedBy: [] } },
+    { upsert: true, new: true }
+  );
+  res.status(201).json({ request: { _id: request._id.toString(), direction: "outgoing", user: directoryUser(requested) } });
+});
+
+app.post("/v1/contacts/requests/:id/accept", auth, async (req, res) => {
+  const request = await Contact.findOne({ _id: req.params.id, users: req.auth.sub, status: "pending" });
+  if (!request) return res.sendStatus(404);
+  if (request.addedBy.toString() === req.auth.sub) return res.status(403).json({ error: "Only the recipient can accept this request" });
+  request.status = "accepted"; await request.save();
+  let conversation = await Conversation.findOne({ isGroup: false, members: { $all: request.users, $size: 2 } });
+  if (!conversation) conversation = await Conversation.create({ isGroup: false, members: request.users, createdBy: request.addedBy });
+  res.json({ ok: true, conversation });
+});
+
+app.delete("/v1/contacts/requests/:id", auth, async (req, res) => {
+  const request = await Contact.findOne({ _id: req.params.id, users: req.auth.sub, status: "pending" });
+  if (!request) return res.sendStatus(404);
+  if (request.addedBy.toString() === req.auth.sub) await request.deleteOne();
+  else { request.status = "declined"; await request.save(); }
+  res.json({ ok: true });
+});
+
+app.get("/v1/groups/invitations", auth, async (req, res) => {
+  const invitations = await GroupInvitation.find({ invitee: req.auth.sub, status: "pending" })
+    .populate("conversation", "title").populate("inviter", "username displayName avatarUrl").sort({ createdAt: -1 });
+  res.json({ invitations: invitations.map((invite) => ({
+    _id: invite._id.toString(),
+    groupId: invite.conversation._id.toString(),
+    groupTitle: invite.conversation.title || "Mowell group",
+    inviter: directoryUser(invite.inviter)
+  })) });
+});
+
+app.post("/v1/groups/invitations/:id/accept", auth, async (req, res) => {
+  const invitation = await GroupInvitation.findOne({ _id: req.params.id, invitee: req.auth.sub, status: "pending" });
+  if (!invitation) return res.sendStatus(404);
+  const conversation = await Conversation.findOneAndUpdate(
+    { _id: invitation.conversation, isGroup: true }, { $addToSet: { members: req.auth.sub } }, { new: true }
+  );
+  if (!conversation) return res.sendStatus(404);
+  invitation.status = "accepted"; await invitation.save();
+  res.json({ ok: true, conversation });
+});
+
+app.delete("/v1/groups/invitations/:id", auth, async (req, res) => {
+  const invitation = await GroupInvitation.findOne({ _id: req.params.id, invitee: req.auth.sub, status: "pending" });
+  if (!invitation) return res.sendStatus(404);
+  invitation.status = "declined"; await invitation.save();
+  res.json({ ok: true });
 });
 
 app.get("/v1/conversations", auth, async (req, res) => {
-  const contacts = await Contact.find({ users: req.auth.sub }).lean();
+  const contacts = await Contact.find({ users: req.auth.sub, status: "accepted" }).lean();
   const contactByPair = new Map(contacts.map((contact) => [contact.pairKey, contact]));
   const conversations = await Conversation.find({ members: req.auth.sub }).populate("members", "username displayName avatarUrl lastSeenAt").sort({ lastMessageAt: -1 }).limit(100);
   const visible = conversations.flatMap((conversation) => {
@@ -348,23 +443,93 @@ app.get("/v1/conversations", auth, async (req, res) => {
 });
 
 app.post("/v1/conversations", auth, async (req, res) => {
-  const memberIds = [...new Set([req.auth.sub, ...(req.body.memberIds || []).map(String)])];
-  if (memberIds.length < 2) return res.status(400).json({ error: "Select at least one other user" });
+  const requestedMemberIds = [...new Set((req.body.memberIds || []).map(String).filter((id) => id !== req.auth.sub))];
+  const inviteIds = [...new Set((req.body.inviteIds || []).map(String).filter((id) => id !== req.auth.sub))];
+  const memberIds = [req.auth.sub, ...requestedMemberIds];
+  if (memberIds.length < 2 && inviteIds.length === 0) return res.status(400).json({ error: "Select or invite at least one other user" });
   const validCount = await User.countDocuments({ _id: { $in: memberIds } });
   if (validCount !== memberIds.length) return res.status(400).json({ error: "One or more users do not exist" });
   const isGroup = memberIds.length > 2 || Boolean(req.body.isGroup);
   if (!isGroup) {
     const pairKey = contactPair(memberIds[0], memberIds[1]);
-    await Contact.updateOne(
-      { pairKey },
-      { $setOnInsert: { pairKey, users: memberIds, addedBy: req.auth.sub, blockedBy: [] } },
-      { upsert: true }
-    );
+    const contact = await Contact.findOne({ pairKey, status: "accepted" });
+    if (!contact) return res.status(403).json({ error: "Both people must accept the connection before chatting" });
     const existing = await Conversation.findOne({ isGroup: false, members: { $all: memberIds, $size: 2 } });
     if (existing) return res.json({ conversation: existing });
+  } else {
+    const accepted = await Contact.countDocuments({ users: req.auth.sub, status: "accepted", pairKey: { $in: requestedMemberIds.map((id) => contactPair(req.auth.sub, id)) } });
+    if (accepted !== requestedMemberIds.length) return res.status(403).json({ error: "Only accepted contacts can be added directly to a group" });
   }
-  const conversation = await Conversation.create({ title: req.body.title, isGroup, members: memberIds, createdBy: req.auth.sub });
+  const conversation = await Conversation.create({ title: req.body.title, isGroup, members: memberIds, createdBy: req.auth.sub, admins: isGroup ? [req.auth.sub] : [] });
+  if (isGroup && inviteIds.length) {
+    const validInvites = await User.find({ _id: { $in: inviteIds } }).select("_id");
+    await Promise.all(validInvites.map((user) => GroupInvitation.findOneAndUpdate(
+      { conversation: conversation._id, invitee: user._id },
+      { $set: { inviter: req.auth.sub, status: "pending" } },
+      { upsert: true, new: true }
+    )));
+  }
   res.status(201).json({ conversation });
+});
+
+app.post("/v1/conversations/:id/members", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can add people" });
+  const memberIds = [...new Set((req.body.memberIds || []).map(String).filter((id) => id !== req.auth.sub))];
+  const inviteIds = [...new Set((req.body.inviteIds || []).map(String).filter((id) => id !== req.auth.sub))];
+  if (!memberIds.length && !inviteIds.length) return res.status(400).json({ error: "Select or invite at least one person" });
+  const accepted = await Contact.countDocuments({ users: req.auth.sub, status: "accepted", pairKey: { $in: memberIds.map((id) => contactPair(req.auth.sub, id)) } });
+  if (accepted !== memberIds.length) return res.status(403).json({ error: "Only accepted contacts can be added directly" });
+  if (memberIds.length) await Conversation.updateOne({ _id: conversation._id }, { $addToSet: { members: { $each: memberIds } } });
+  if (inviteIds.length) {
+    const validInvites = await User.find({ _id: { $in: inviteIds } }).select("_id");
+    await Promise.all(validInvites.map((user) => GroupInvitation.findOneAndUpdate(
+      { conversation: conversation._id, invitee: user._id },
+      { $set: { inviter: req.auth.sub, status: "pending" } },
+      { upsert: true, new: true }
+    )));
+  }
+  res.json({ ok: true });
+});
+
+app.get("/v1/conversations/:id/members", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub })
+    .populate("members", "username displayName avatarUrl lastSeenAt");
+  if (!conversation) return res.sendStatus(404);
+  const creatorId = conversation.createdBy.toString();
+  const adminIds = new Set((conversation.admins || []).map(String));
+  adminIds.add(creatorId);
+  res.json({
+    creatorId,
+    viewerIsAdmin: isGroupAdmin(conversation, req.auth.sub),
+    members: conversation.members.map((user) => ({ ...directoryUser(user), isCreator: user._id.toString() === creatorId, isAdmin: adminIds.has(user._id.toString()) }))
+  });
+});
+
+app.post("/v1/conversations/:id/admins/:userId", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can promote members" });
+  if (!conversation.members.some((id) => id.toString() === req.params.userId)) return res.status(404).json({ error: "This user is not in the group" });
+  await Conversation.updateOne({ _id: conversation._id }, { $addToSet: { admins: req.params.userId } });
+  res.json({ ok: true });
+});
+
+app.delete("/v1/conversations/:id/admins/:userId", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || conversation.createdBy.toString() !== req.auth.sub) return res.status(403).json({ error: "Only the group creator can demote an admin" });
+  if (conversation.createdBy.toString() === req.params.userId) return res.status(409).json({ error: "The group creator is always super-admin" });
+  await Conversation.updateOne({ _id: conversation._id }, { $pull: { admins: req.params.userId } });
+  res.json({ ok: true });
+});
+
+app.delete("/v1/conversations/:id/members/:userId", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can remove members" });
+  if (conversation.createdBy.toString() === req.params.userId) return res.status(409).json({ error: "The group creator cannot be removed" });
+  const targetIsAdmin = (conversation.admins || []).some((id) => id.toString() === req.params.userId);
+  if (targetIsAdmin && conversation.createdBy.toString() !== req.auth.sub) return res.status(403).json({ error: "Only the group creator can remove another admin" });
+  await Conversation.updateOne({ _id: conversation._id }, { $pull: { members: req.params.userId, admins: req.params.userId } });
+  res.json({ ok: true });
 });
 
 app.post("/v1/conversations/:id/block", auth, async (req, res) => {
@@ -374,7 +539,7 @@ app.post("/v1/conversations/:id/block", auth, async (req, res) => {
   const contact = await Contact.findOneAndUpdate(
     { pairKey },
     {
-      $setOnInsert: { pairKey, users: conversation.members, addedBy: req.auth.sub },
+      $setOnInsert: { pairKey, users: conversation.members, addedBy: req.auth.sub, status: "accepted" },
       $addToSet: { blockedBy: req.auth.sub }
     },
     { upsert: true, new: true }
@@ -565,8 +730,8 @@ app.post("/v1/calls/:room/invite", auth, async (req, res) => {
     if (!invited || invited._id.toString() === req.auth.sub) return res.status(404).json({ error: "Username not found" });
     const pairKey = contactPair(req.auth.sub, invited._id);
     const contact = await Contact.findOne({ pairKey });
-    if (contact?.blockedBy?.length) return res.status(403).json({ error: "This contact is blocked" });
-    if (!contact) await Contact.create({ pairKey, users: [req.auth.sub, invited._id], addedBy: req.auth.sub, blockedBy: [] });
+    if (!contact || contact.status !== "accepted") return res.status(403).json({ error: "Connect with this person before adding them to a call" });
+    if (contact.blockedBy?.length) return res.status(403).json({ error: "This contact is blocked" });
     if (call.participants.length >= 6 && !call.participants.some((id) => id.toString() === invited._id.toString())) return res.status(409).json({ error: "A direct mesh call supports up to 6 members" });
     if (!call.participants.some((id) => id.toString() === invited._id.toString())) {
       call.participants.push(invited._id); await call.save();

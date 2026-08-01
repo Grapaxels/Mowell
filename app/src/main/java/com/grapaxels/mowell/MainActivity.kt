@@ -28,6 +28,9 @@ import androidx.lifecycle.viewModelScope
 import com.grapaxels.mowell.auth.AuthRepository
 import com.grapaxels.mowell.auth.AuthResult
 import com.grapaxels.mowell.auth.AuthSession
+import com.grapaxels.mowell.auth.ConnectionRequest
+import com.grapaxels.mowell.auth.GroupInvitation
+import com.grapaxels.mowell.auth.GroupMemberState
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.call.CallCoordinator
 import com.grapaxels.mowell.data.CachedUser
@@ -142,6 +145,14 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val passwordResetStatus: StateFlow<String?> = _passwordResetStatus.asStateFlow()
     private val _userResults = MutableStateFlow<List<UserProfile>>(emptyList())
     val userResults: StateFlow<List<UserProfile>> = _userResults.asStateFlow()
+    private val _connections = MutableStateFlow<List<UserProfile>>(emptyList())
+    val connections: StateFlow<List<UserProfile>> = _connections.asStateFlow()
+    private val _connectionRequests = MutableStateFlow<List<ConnectionRequest>>(emptyList())
+    val connectionRequests: StateFlow<List<ConnectionRequest>> = _connectionRequests.asStateFlow()
+    private val _groupInvitations = MutableStateFlow<List<GroupInvitation>>(emptyList())
+    val groupInvitations: StateFlow<List<GroupInvitation>> = _groupInvitations.asStateFlow()
+    private val _groupMemberStates = MutableStateFlow<Map<String, GroupMemberState>>(emptyMap())
+    val groupMemberStates: StateFlow<Map<String, GroupMemberState>> = _groupMemberStates.asStateFlow()
     private val _update = MutableStateFlow<UpdateInfo?>(null)
     val update: StateFlow<UpdateInfo?> = _update.asStateFlow()
     private val _showUpdatePopup = MutableStateFlow(false)
@@ -187,6 +198,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                     validation.verificationEmail != null -> { _session.value = null; _verificationEmail.value = validation.verificationEmail; _authError.value = validation.error }
                     else -> Unit
                 }
+                refreshSocial()
             }
         }
     }
@@ -499,6 +511,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                 MessageSyncService.start(getApplication())
                 _verificationEmail.value = null
                 refreshUpdate(showPopup = true)
+                refreshSocial()
             }
             else {
                 if (!result.verificationEmail.isNullOrBlank()) _verificationEmail.value = result.verificationEmail
@@ -559,28 +572,94 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun refreshSocial() {
+        if (_session.value == null) return
+        viewModelScope.launch {
+            auth.fetchConnections().onSuccess { _connections.value = it }
+            auth.fetchConnectionRequests().onSuccess { _connectionRequests.value = it }
+            auth.fetchGroupInvitations().onSuccess { _groupInvitations.value = it }
+        }
+    }
+
+    fun sendConnectionRequest(user: UserProfile) {
+        viewModelScope.launch {
+            auth.sendConnectionRequest(user.id).onSuccess {
+                _authError.value = "Connection request sent to @${user.username}"
+                refreshSocial()
+            }.onFailure { _authError.value = it.message ?: "Could not send connection request" }
+        }
+    }
+
+    fun respondConnectionRequest(requestId: String, accept: Boolean) {
+        viewModelScope.launch {
+            auth.respondConnectionRequest(requestId, accept).onSuccess {
+                refreshSocial()
+                if (accept) syncAllConversations()
+            }.onFailure { _authError.value = it.message ?: "Could not update connection request" }
+        }
+    }
+
+    fun respondGroupInvitation(invitationId: String, accept: Boolean) {
+        viewModelScope.launch {
+            auth.respondGroupInvitation(invitationId, accept).onSuccess {
+                refreshSocial()
+                if (accept) syncAllConversations()
+            }.onFailure { _authError.value = it.message ?: "Could not update group invitation" }
+        }
+    }
+
+    fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>, onReady: (String) -> Unit) {
+        viewModelScope.launch {
+            auth.createGroup(title, memberIds, inviteIds).onSuccess { conversationId ->
+                dao.upsertConversation(ConversationEntity(conversationId, title.trim(), "Group created", true, System.currentTimeMillis()))
+                syncAllConversations()
+                onReady(conversationId)
+            }.onFailure { _authError.value = it.message ?: "Could not create group" }
+        }
+    }
+
+    fun addGroupMembers(conversationId: String, memberIds: Set<String>, inviteIds: Set<String>, onDone: () -> Unit) {
+        viewModelScope.launch {
+            auth.addGroupMembers(conversationId, memberIds, inviteIds).onSuccess {
+                syncAllConversations(); refreshGroupMembers(conversationId); onDone()
+            }.onFailure { _authError.value = it.message ?: "Could not add group members" }
+        }
+    }
+
+    fun refreshGroupMembers(conversationId: String) {
+        viewModelScope.launch {
+            auth.fetchGroupMembers(conversationId).onSuccess { state ->
+                _groupMemberStates.value = _groupMemberStates.value.toMutableMap().apply { put(conversationId, state) }
+            }
+        }
+    }
+
+    fun setGroupAdmin(conversationId: String, userId: String, admin: Boolean) {
+        viewModelScope.launch {
+            auth.setGroupAdmin(conversationId, userId, admin).onSuccess { refreshGroupMembers(conversationId) }
+                .onFailure { _authError.value = it.message ?: "Could not change admin role" }
+        }
+    }
+
+    fun removeGroupMember(conversationId: String, userId: String) {
+        viewModelScope.launch {
+            auth.removeGroupMember(conversationId, userId).onSuccess { refreshGroupMembers(conversationId); syncAllConversations() }
+                .onFailure { _authError.value = it.message ?: "Could not remove group member" }
+        }
+    }
+
     fun startChat(user: UserProfile, onReady: (String) -> Unit) {
         viewModelScope.launch {
             val existing = conversations.value.find { it.username.equals(user.username, ignoreCase = true) }
             if (existing != null) { onReady(existing.id); return@launch }
-            val conversationId = auth.createConversation(user.id).getOrElse {
-                _authError.value = it.message ?: "Could not add this user"
-                return@launch
-            }
-            dao.upsertConversation(ConversationEntity(conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis(), user.username, user.avatarUrl))
-            onReady(conversationId)
+            auth.sendConnectionRequest(user.id).onSuccess { refreshSocial() }
+                .onFailure { _authError.value = it.message ?: "Could not send connection request" }
         }
     }
 
     fun addUser(user: UserProfile) {
-        viewModelScope.launch {
-            if (conversations.value.any { it.username.equals(user.username, ignoreCase = true) }) return@launch
-            val conversationId = auth.createConversation(user.id).getOrElse {
-                _authError.value = it.message ?: "Could not add this user"
-                return@launch
-            }
-            dao.upsertConversation(ConversationEntity(conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis(), user.username, user.avatarUrl))
-        }
+        if (conversations.value.any { it.username.equals(user.username, ignoreCase = true) }) return
+        sendConnectionRequest(user)
     }
 
     fun setUserBlocked(conversationId: String, blocked: Boolean) {
@@ -599,6 +678,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         auth.logout()
         _session.value = null
         _userResults.value = emptyList()
+        _connections.value = emptyList()
+        _connectionRequests.value = emptyList()
+        _groupInvitations.value = emptyList()
+        _groupMemberStates.value = emptyMap()
         _typingUsers.value = emptyMap()
         syncCursors.clear()
         notifier.clearAll()

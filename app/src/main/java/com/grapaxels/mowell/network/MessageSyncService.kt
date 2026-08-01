@@ -40,6 +40,7 @@ class MessageSyncService : Service() {
     private lateinit var notifier: MessageNotifier
     private lateinit var updater: AppUpdater
     private var nextUpdateCheckAt = 0L
+    private var nextSocialCheckAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -50,6 +51,10 @@ class MessageSyncService : Service() {
         scope.launch {
             while (isActive) {
                 runCatching { syncMessages() }
+                if (System.currentTimeMillis() >= nextSocialCheckAt) {
+                    runCatching { syncApprovalRequests() }
+                    nextSocialCheckAt = System.currentTimeMillis() + 5_000L
+                }
                 if (System.currentTimeMillis() >= nextUpdateCheckAt) {
                     runCatching { checkForUpdate() }
                     nextUpdateCheckAt = System.currentTimeMillis() + 30 * 60 * 1000L
@@ -132,6 +137,20 @@ class MessageSyncService : Service() {
         if (state.getInt("notified_version", 0) >= update.versionCode) return
         notifier.showUpdateAvailable(update.versionName)
         state.edit().putInt("notified_version", update.versionCode).apply()
+    }
+
+    private suspend fun syncApprovalRequests() {
+        val seen = getSharedPreferences("mowell_approval_notifications", Context.MODE_PRIVATE)
+        val notified = seen.getStringSet("ids", emptySet()).orEmpty().toMutableSet()
+        auth.fetchConnectionRequests().getOrDefault(emptyList()).filter { it.direction == "incoming" }.forEach { request ->
+            val key = "contact:${request.id}"
+            if (notified.add(key)) notifier.showConnectionRequest(request.id, request.user.displayName, request.user.username)
+        }
+        auth.fetchGroupInvitations().getOrDefault(emptyList()).forEach { invitation ->
+            val key = "group:${invitation.id}"
+            if (notified.add(key)) notifier.showGroupInvitation(invitation.id, invitation.groupTitle, invitation.inviter.displayName)
+        }
+        seen.edit().putStringSet("ids", notified.toList().takeLast(250).toSet()).apply()
     }
 
     private fun preview(kind: String, body: String, attachmentName: String?): String = when (kind) {

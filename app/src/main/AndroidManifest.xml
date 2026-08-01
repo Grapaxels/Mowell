@@ -47,7 +47,7 @@
             android:name=".call.MowellCallActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="false"
-            android:screenOrientation="fullSensor" />
+            android:screenOrientation="user" />
         <receiver android:name=".network.NotificationActionReceiver" android:exported="false" />
         <service
             android:name=".network.MessageSyncService"

@@ -25,6 +25,7 @@ const conversationSchema = new mongoose.Schema({
   isGroup: { type: Boolean, default: false },
   members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  admins: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   lastMessageAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 conversationSchema.index({ members: 1, lastMessageAt: -1 });
@@ -45,18 +46,28 @@ export const User = mongoose.model("User", userSchema);
 export const Conversation = mongoose.model("Conversation", conversationSchema);
 export const Message = mongoose.model("Message", messageSchema);
 
-// A contact is reciprocal: when one person deliberately taps Add, the direct
-// conversation becomes visible to both people. Blocking is tracked per user,
-// while either block stops direct messaging and calls in both directions.
+// Contacts require explicit approval. Existing rows are migrated to accepted
+// by the API so upgrades never hide established conversations.
 const contactSchema = new mongoose.Schema({
   pairKey: { type: String, unique: true, required: true, index: true },
   users: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
   addedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  status: { type: String, enum: ["pending", "accepted", "declined"], default: "accepted", index: true },
   blockedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }]
 }, { timestamps: true });
 contactSchema.index({ users: 1 });
 
 export const Contact = mongoose.model("Contact", contactSchema);
+
+const groupInvitationSchema = new mongoose.Schema({
+  conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
+  inviter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  invitee: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  status: { type: String, enum: ["pending", "accepted", "declined"], default: "pending", index: true }
+}, { timestamps: true });
+groupInvitationSchema.index({ conversation: 1, invitee: 1 }, { unique: true });
+
+export const GroupInvitation = mongoose.model("GroupInvitation", groupInvitationSchema);
 
 const typingStateSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },

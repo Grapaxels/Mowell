@@ -213,9 +213,9 @@ private fun SplashScreen() {
             OrbLogo(104.dp)
             Spacer(Modifier.height(24.dp))
             Text("Mowell", fontSize = 42.sp, fontWeight = FontWeight.Black, color = Ink)
-            Text("by Grapaxels", color = Violet, fontStyle = FontStyle.Italic, fontSize = 17.sp)
+            Text("from Grapaxels", color = Violet, fontStyle = FontStyle.Italic, fontSize = 17.sp)
             Spacer(Modifier.height(10.dp))
-            Text("BY GRAPAXELS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            Text("FROM GRAPAXELS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
         }
     }
 }
@@ -269,7 +269,7 @@ private fun AuthScreen(vm: MowellViewModel) {
         var code by remember(verificationEmail) { mutableStateOf("") }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp), verticalArrangement = Arrangement.Center) {
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) { OrbLogo(58.dp); Spacer(Modifier.width(14.dp)); Column { Text("Mowell", fontSize = 31.sp, fontWeight = FontWeight.Black); Text("by Grapaxels", color = Violet) } }
+                Row(verticalAlignment = Alignment.CenterVertically) { OrbLogo(58.dp); Spacer(Modifier.width(14.dp)); Column { Text("Mowell", fontSize = 31.sp, fontWeight = FontWeight.Black); Text("from Grapaxels", color = Violet) } }
                 Spacer(Modifier.height(28.dp))
                 ClayCard(Lavender) {
                     Text("Verify your email", fontSize = 27.sp, fontWeight = FontWeight.Black)
@@ -323,6 +323,8 @@ private fun MainExperience(vm: MowellViewModel) {
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf<ConversationEntity?>(null) }
+    var addMenu by remember { mutableStateOf(false) }
+    var createGroup by remember { mutableStateOf(false) }
     BackHandler {
         when {
             profile != null -> profile = null
@@ -331,6 +333,7 @@ private fun MainExperience(vm: MowellViewModel) {
             else -> Unit
         }
     }
+    if (createGroup) CreateGroupDialog(vm, { createGroup = false }) { conversationId -> createGroup = false; openChat = conversationId }
     when {
         profile != null -> ProfileScreen(vm, profile!!, { profile = null })
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
@@ -346,7 +349,15 @@ private fun MainExperience(vm: MowellViewModel) {
                     Nav(Page.YOU, page, "You", Icons.Rounded.Person) { page = it }
                 }
             },
-            floatingActionButton = { if (page == Page.CHATS) FloatingActionButton(onClick = { page = Page.PEOPLE }, containerColor = Lime, contentColor = Ink, shape = RoundedCornerShape(20.dp)) { Icon(Icons.Rounded.Add, "Find people") } }
+            floatingActionButton = {
+                if (page == Page.CHATS) Box {
+                    FloatingActionButton(onClick = { addMenu = true }, containerColor = Lime, contentColor = Ink, shape = RoundedCornerShape(18.dp)) { Icon(Icons.Rounded.Add, "New") }
+                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                        DropdownMenuItem(text = { Text("Connect people") }, leadingIcon = { Icon(Icons.Rounded.Search, null) }, onClick = { addMenu = false; page = Page.PEOPLE })
+                        DropdownMenuItem(text = { Text("Create group") }, leadingIcon = { Icon(Icons.Rounded.Groups, null) }, onClick = { addMenu = false; createGroup = true; vm.refreshSocial() })
+                    }
+                }
+            }
         ) { padding ->
             when (page) {
                 Page.CHATS -> ChatsScreen(vm, Modifier.padding(padding)) { openChat = it }
@@ -361,9 +372,9 @@ private fun MainExperience(vm: MowellViewModel) {
 
 @Composable
 private fun ClayHeader(vm: MowellViewModel) {
-    Row(Modifier.fillMaxWidth().background(Canvas).padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        OrbLogo(44.dp); Spacer(Modifier.width(11.dp))
-        Column(Modifier.weight(1f)) { Text("Mowell", fontSize = 25.sp, fontWeight = FontWeight.Black); Text("by Grapaxels", color = Violet, fontStyle = FontStyle.Italic, fontSize = 12.sp) }
+    Row(Modifier.fillMaxWidth().background(Canvas).padding(horizontal = 14.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        OrbLogo(38.dp); Spacer(Modifier.width(9.dp))
+        Column(Modifier.weight(1f)) { Text("Mowell", fontSize = 22.sp, fontWeight = FontWeight.Black); Text("from Grapaxels", color = Violet, fontStyle = FontStyle.Italic, fontSize = 10.sp) }
         Row(Modifier.clip(RoundedCornerShape(18.dp)).background(if (vm.networkLabel().startsWith("Internet")) Lime else Peach).padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(if (vm.networkLabel().startsWith("Internet")) Icons.Rounded.Wifi else Icons.Rounded.Bluetooth, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(if (vm.networkLabel().startsWith("Internet")) "online" else "nearby", fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
@@ -380,12 +391,14 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
     val conversations by vm.conversations.collectAsStateWithLifecycle()
     val chatLists by vm.chatLists.collectAsStateWithLifecycle()
     val users by vm.userResults.collectAsStateWithLifecycle()
+    val requests by vm.connectionRequests.collectAsStateWithLifecycle()
     var peopleQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("all") }
     var creatingList by remember { mutableStateOf(false) }
     var listName by remember { mutableStateOf("") }
     var selectedPeople by remember { mutableStateOf(setOf<String>()) }
     val people = conversations.filter { !it.isGroup && it.id != "general" }
+    LaunchedEffect(Unit) { while (true) { vm.refreshSocial(); delay(5_000) } }
     val visibleConversations = when (selectedFilter) {
         "unread" -> conversations.filter { it.unreadCount > 0 }
         "groups" -> conversations.filter { it.isGroup }
@@ -443,7 +456,7 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
         )
     }
 
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             ClayField(peopleQuery, { value -> peopleQuery = value.lowercase(); vm.searchUsers(value) }, "Search people by username", leading = Icons.Rounded.Search)
         }
@@ -468,12 +481,15 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
         if (peopleQuery.length >= 2) {
             items(users, key = { "person-${it.id}" }) { user ->
                 val existing = conversations.find { it.username.equals(user.username, ignoreCase = true) }
+                val request = requests.find { it.user.id == user.id }
                 ClayCard(ClayWhite) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
-                        Button(onClick = { if (existing != null) open(existing.id) else vm.addUser(user) }, shape = RoundedCornerShape(14.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp)) {
-                            Icon(if (existing == null) Icons.Rounded.Add else Icons.Rounded.ChatBubble, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(if (existing == null) "Add" else "Chat")
+                        Button(enabled = existing != null || request?.direction != "outgoing", onClick = {
+                            when { existing != null -> open(existing.id); request?.direction == "incoming" -> vm.respondConnectionRequest(request.id, true); request == null -> vm.sendConnectionRequest(user) }
+                        }, shape = RoundedCornerShape(14.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp)) {
+                            Icon(if (existing == null) Icons.Rounded.Add else Icons.Rounded.ChatBubble, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(when { existing != null -> "Chat"; request?.direction == "incoming" -> "Accept"; request?.direction == "outgoing" -> "Requested"; else -> "Connect" })
                         }
                     }
                 }
@@ -488,13 +504,13 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
 
 @Composable
 private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit) {
-    ClayCard(if (conversation.isGroup) Lavender else ClayWhite, Modifier.clickable(onClick = onClick)) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).shadow(6.dp, RoundedCornerShape(21.dp), ambientColor = Violet.copy(alpha = .12f), spotColor = Violet.copy(alpha = .17f)).clip(RoundedCornerShape(21.dp)).background(if (conversation.isGroup) Lavender else ClayWhite).border(1.dp, Color.White.copy(alpha = .8f), RoundedCornerShape(21.dp)).padding(horizontal = 13.dp, vertical = 11.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Avatar(conversation.title, 54.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
-            Spacer(Modifier.width(13.dp))
+            Avatar(conversation.title, 46.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
+            Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
-                Text(conversation.title, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text(conversation.subtitle, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+                Text(conversation.title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(conversation.subtitle, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(time(conversation.updatedAt), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -505,25 +521,134 @@ private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Un
 }
 
 @Composable
+private fun CreateGroupDialog(vm: MowellViewModel, dismiss: () -> Unit, created: (String) -> Unit) {
+    val connections by vm.connections.collectAsStateWithLifecycle()
+    val searchResults by vm.userResults.collectAsStateWithLifecycle()
+    var title by remember { mutableStateOf("") }
+    var inviteQuery by remember { mutableStateOf("") }
+    var members by remember { mutableStateOf(setOf<String>()) }
+    var invites by remember { mutableStateOf(setOf<String>()) }
+    val connectionIds = connections.map { it.id }.toSet()
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text("Create group", fontWeight = FontWeight.Black) },
+        text = {
+            Column {
+                OutlinedTextField(title, { title = it.take(80) }, label = { Text("Group name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp)); Text("Add connected people", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 170.dp)) {
+                    items(connections, key = { "group-member-${it.id}" }) { user ->
+                        val checked = user.id in members
+                        Row(Modifier.fillMaxWidth().clickable { members = if (checked) members - user.id else members + user.id }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked, { members = if (checked) members - user.id else members + user.id }); Avatar(user.displayName, 34.dp, Violet, user.avatarUrl); Spacer(Modifier.width(8.dp)); Text(user.displayName, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    if (connections.isEmpty()) item { Text("No accepted connections yet.", color = Muted, modifier = Modifier.padding(vertical = 10.dp)) }
+                }
+                Spacer(Modifier.height(7.dp)); Text("Invite someone not connected", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                OutlinedTextField(inviteQuery, { inviteQuery = it.lowercase(); vm.searchUsers(it) }, placeholder = { Text("Search @username") }, leadingIcon = { Icon(Icons.Rounded.Search, null) }, trailingIcon = if (inviteQuery.isNotEmpty()) {{ IconButton(onClick = { inviteQuery = ""; vm.searchUsers("") }) { Icon(Icons.Rounded.Close, "Close search") } }} else null, singleLine = true, modifier = Modifier.fillMaxWidth())
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 140.dp)) {
+                    items(if (inviteQuery.length >= 2) searchResults.filter { it.id !in connectionIds } else emptyList(), key = { "group-invite-${it.id}" }) { user ->
+                        val checked = user.id in invites
+                        Row(Modifier.fillMaxWidth().clickable { invites = if (checked) invites - user.id else invites + user.id }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked, { invites = if (checked) invites - user.id else invites + user.id }); Avatar(user.displayName, 32.dp, Ink, user.avatarUrl); Spacer(Modifier.width(8.dp)); Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("Invite @${user.username}", color = Violet, fontSize = 11.sp) }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(enabled = title.trim().isNotEmpty() && (members.isNotEmpty() || invites.isNotEmpty()), onClick = { vm.createGroup(title, members, invites, created) }) { Text("Create") } },
+        dismissButton = { OutlinedButton(onClick = dismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun AddGroupMembersDialog(vm: MowellViewModel, conversationId: String, dismiss: () -> Unit) {
+    val connections by vm.connections.collectAsStateWithLifecycle()
+    val searchResults by vm.userResults.collectAsStateWithLifecycle()
+    var inviteQuery by remember { mutableStateOf("") }
+    var members by remember { mutableStateOf(setOf<String>()) }
+    var invites by remember { mutableStateOf(setOf<String>()) }
+    val connectionIds = connections.map { it.id }.toSet()
+    LaunchedEffect(Unit) { vm.refreshSocial() }
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text("Add group members", fontWeight = FontWeight.Black) },
+        text = {
+            Column {
+                Text("Connected people join immediately", color = Muted, fontSize = 12.sp)
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 190.dp)) {
+                    items(connections, key = { "add-member-${it.id}" }) { user ->
+                        val checked = user.id in members
+                        Row(Modifier.fillMaxWidth().clickable { members = if (checked) members - user.id else members + user.id }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked, { members = if (checked) members - user.id else members + user.id }); Avatar(user.displayName, 34.dp, Violet, user.avatarUrl); Spacer(Modifier.width(8.dp)); Text(user.displayName, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(7.dp)); Text("Invite a non-contact", color = Muted, fontSize = 12.sp)
+                OutlinedTextField(inviteQuery, { inviteQuery = it.lowercase(); vm.searchUsers(it) }, placeholder = { Text("Search @username") }, leadingIcon = { Icon(Icons.Rounded.Search, null) }, trailingIcon = if (inviteQuery.isNotEmpty()) {{ IconButton(onClick = { inviteQuery = ""; vm.searchUsers("") }) { Icon(Icons.Rounded.Close, "Close search") } }} else null, singleLine = true, modifier = Modifier.fillMaxWidth())
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 150.dp)) {
+                    items(if (inviteQuery.length >= 2) searchResults.filter { it.id !in connectionIds } else emptyList(), key = { "add-invite-${it.id}" }) { user ->
+                        val checked = user.id in invites
+                        Row(Modifier.fillMaxWidth().clickable { invites = if (checked) invites - user.id else invites + user.id }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked, { invites = if (checked) invites - user.id else invites + user.id }); Avatar(user.displayName, 32.dp, Ink, user.avatarUrl); Spacer(Modifier.width(8.dp)); Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("Invite @${user.username}", color = Violet, fontSize = 11.sp) }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(enabled = members.isNotEmpty() || invites.isNotEmpty(), onClick = { vm.addGroupMembers(conversationId, members, invites, dismiss) }) { Text("Add") } },
+        dismissButton = { OutlinedButton(onClick = dismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
 private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserProfile) -> Unit) {
     val users by vm.userResults.collectAsStateWithLifecycle()
     val conversations by vm.conversations.collectAsStateWithLifecycle()
+    val requests by vm.connectionRequests.collectAsStateWithLifecycle()
+    val groupInvitations by vm.groupInvitations.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LaunchedEffect(Unit) { while (true) { vm.refreshSocial(); delay(4_000) } }
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Text("Find your people", fontSize = 30.sp, fontWeight = FontWeight.Black)
-            Text("Search the central directory by @username.", color = Muted)
-            Spacer(Modifier.height(14.dp))
+            Text("Connect people", fontSize = 23.sp, fontWeight = FontWeight.Black)
+            Text("Both people must accept before chatting.", color = Muted, fontSize = 12.sp)
+            Spacer(Modifier.height(7.dp))
             ClayField(query, { query = it.lowercase(); vm.searchUsers(it) }, "Search username", leading = Icons.Rounded.Search)
+        }
+        items(requests.filter { it.direction == "incoming" }, key = { "request-${it.id}" }) { request ->
+            ClayCard(Lavender) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(request.user.displayName, 42.dp, Violet, request.user.avatarUrl); Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) { Text(request.user.displayName, fontWeight = FontWeight.Bold); Text("wants to connect · @${request.user.username}", color = Muted, fontSize = 11.sp) }
+                    OutlinedButton(onClick = { vm.respondConnectionRequest(request.id, false) }, contentPadding = PaddingValues(horizontal = 9.dp)) { Text("Decline", fontSize = 11.sp) }
+                    Spacer(Modifier.width(5.dp)); Button(onClick = { vm.respondConnectionRequest(request.id, true) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Accept", fontSize = 11.sp) }
+                }
+            }
+        }
+        items(groupInvitations, key = { "group-invitation-${it.id}" }) { invitation ->
+            ClayCard(Peach) {
+                Text("Group invitation", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(invitation.groupTitle, fontWeight = FontWeight.Black)
+                Text("Invited by ${invitation.inviter.displayName}", color = Muted, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    OutlinedButton(onClick = { vm.respondGroupInvitation(invitation.id, false) }) { Text("Decline") }
+                    Button(onClick = { vm.respondGroupInvitation(invitation.id, true) }) { Text("Join group") }
+                }
+            }
         }
         items(users, key = { it.id }) { user ->
             val existing = conversations.find { it.username.equals(user.username, ignoreCase = true) }
+            val request = requests.find { it.user.id == user.id }
             ClayCard(ClayWhite) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
-                    Button(onClick = { if (existing != null) onUser(user) else vm.addUser(user) }, shape = RoundedCornerShape(14.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp)) {
-                        Icon(if (existing == null) Icons.Rounded.Add else Icons.Rounded.ChatBubble, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(if (existing == null) "Add" else "Chat")
+                    Button(enabled = existing != null || request?.direction != "outgoing", onClick = {
+                        when { existing != null -> onUser(user); request?.direction == "incoming" -> vm.respondConnectionRequest(request.id, true); request == null -> vm.sendConnectionRequest(user) }
+                    }, shape = RoundedCornerShape(14.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp)) {
+                        Icon(if (existing != null) Icons.Rounded.ChatBubble else Icons.Rounded.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(when { existing != null -> "Chat"; request?.direction == "incoming" -> "Accept"; request?.direction == "outgoing" -> "Requested"; else -> "Connect" })
                     }
                 }
             }
@@ -645,8 +770,18 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
 
 @Composable
 private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity, back: () -> Unit) {
+    var addingMembers by remember { mutableStateOf(false) }
+    var removeMember by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val groupStates by vm.groupMemberStates.collectAsStateWithLifecycle()
+    val groupState = groupStates[conversation.id]
+    val session by vm.session.collectAsStateWithLifecycle()
+    LaunchedEffect(conversation.id) { if (conversation.isGroup) vm.refreshGroupMembers(conversation.id) }
     val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)?.let { vm.setConversationSound(conversation.id, it) }
+    }
+    if (addingMembers) AddGroupMembersDialog(vm, conversation.id) { addingMembers = false }
+    removeMember?.let { target ->
+        AlertDialog(onDismissRequest = { removeMember = null }, title = { Text("Remove ${target.second}?") }, text = { Text("They will lose access to this group and its new messages.") }, confirmButton = { Button(onClick = { vm.removeGroupMember(conversation.id, target.first); removeMember = null }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E))) { Text("Remove") } }, dismissButton = { OutlinedButton(onClick = { removeMember = null }) { Text("Cancel") } })
     }
     Scaffold(containerColor = Canvas, topBar = {
         Row(Modifier.fillMaxWidth().background(Canvas).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -654,7 +789,7 @@ private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity,
             Text(if (conversation.isGroup) "Group info" else "Profile", fontWeight = FontWeight.Black, fontSize = 20.sp)
         }
     }) { padding ->
-        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item {
                 Spacer(Modifier.height(12.dp))
                 Avatar(conversation.title, 116.dp, Violet, conversation.avatarUrl)
@@ -669,11 +804,26 @@ private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity,
                     Text(if (conversation.isGroup) "Private group conversation stored on this phone." else "Connected through Mowell. Messages are cached privately in SQLite on this phone.", color = Ink)
                 }
             }
-            if (conversation.isGroup && conversation.members.isNotBlank()) item {
+            if (conversation.isGroup) item {
                 ClayCard(Lavender) {
                     Text("Members", fontWeight = FontWeight.Bold, color = Violet)
-                    Text(conversation.members, color = Ink)
+                    groupState?.members?.forEach { member ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Avatar(member.user.displayName, 38.dp, if (member.isAdmin) Violet else Ink, member.user.avatarUrl); Spacer(Modifier.width(9.dp))
+                            Column(Modifier.weight(1f)) { Text(member.user.displayName, fontWeight = FontWeight.Bold); Text(when { member.isCreator -> "Creator · Super admin"; member.isAdmin -> "Admin"; else -> "Member" }, color = if (member.isAdmin) Violet else Muted, fontSize = 11.sp) }
+                            val viewerIsCreator = groupState.creatorId == session?.user?.id
+                            if (groupState.viewerIsAdmin && member.user.id != session?.user?.id && !member.isCreator) Column(horizontalAlignment = Alignment.End) {
+                                if (!member.isAdmin) Text("Make admin", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { vm.setGroupAdmin(conversation.id, member.user.id, true) }.padding(4.dp))
+                                else if (viewerIsCreator) Text("Remove admin", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { vm.setGroupAdmin(conversation.id, member.user.id, false) }.padding(4.dp))
+                                if (!member.isAdmin || viewerIsCreator) Text("Remove", color = Color(0xFFB3261E), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { removeMember = member.user.id to member.user.displayName }.padding(4.dp))
+                            }
+                        }
+                    }
+                    if (groupState == null) Text(conversation.members.ifBlank { "Loading members…" }, color = Muted)
                 }
+            }
+            if (conversation.isGroup && groupState?.viewerIsAdmin == true) item {
+                Button(onClick = { addingMembers = true }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) { Icon(Icons.Rounded.Add, null); Spacer(Modifier.width(7.dp)); Text("Add members") }
             }
             if (!conversation.isGroup) item {
                 ClayCard(Lavender) {
@@ -835,7 +985,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         onValueChange = { chatQuery = it },
                         placeholder = { Text("Search text or files in this chat") },
                         leadingIcon = { Icon(Icons.Rounded.Search, null) },
-                        trailingIcon = { IconButton(onClick = { chatQuery = "" }) { Icon(Icons.Rounded.Close, "Clear") } },
+                        trailingIcon = { IconButton(onClick = { chatQuery = ""; searchOpen = false }) { Icon(Icons.Rounded.Close, "Close search") } },
                         singleLine = true,
                         shape = RoundedCornerShape(18.dp),
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)

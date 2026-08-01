@@ -1,4 +1,4 @@
-# Mowell by Grapaxels — v0.3
+# Mowell from Grapaxels — v0.3
 
 Mowell is a native Android 7+ communication prototype with a Grapaxels-inspired claymorphic interface. It combines central identity and discovery with phone-local SQLite storage and nearby Bluetooth routing.
 
