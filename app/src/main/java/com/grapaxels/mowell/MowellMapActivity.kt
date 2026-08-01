@@ -52,9 +52,7 @@ class MowellMapActivity : ComponentActivity() {
 }
 
 fun mapUrl(latitude: Double, longitude: Double): String {
-    val delta = 0.006
-    val bbox = listOf(longitude - delta, latitude - delta, longitude + delta, latitude + delta).joinToString("%2C")
-    return "https://www.openstreetmap.org/export/embed.html?bbox=$bbox&layer=mapnik&marker=$latitude%2C$longitude"
+    return "https://maps.google.com/maps?q=$latitude,$longitude&z=16&output=embed"
 }
 
 fun mapHtml(latitude: Double, longitude: Double, interactive: Boolean): String = """

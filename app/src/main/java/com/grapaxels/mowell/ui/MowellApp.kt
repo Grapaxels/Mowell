@@ -61,6 +61,9 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.ContactPhone
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
@@ -95,8 +98,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -132,10 +137,13 @@ import com.grapaxels.mowell.data.MessageEntity
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URL
+import java.io.File
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -360,13 +368,29 @@ private fun RowScope.Nav(target: Page, selected: Page, label: String, icon: Imag
 @Composable
 private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) -> Unit) {
     val conversations by vm.conversations.collectAsStateWithLifecycle()
+    val users by vm.userResults.collectAsStateWithLifecycle()
+    var peopleQuery by remember { mutableStateOf("") }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             Text("Conversations", fontSize = 30.sp, fontWeight = FontWeight.Black)
             Text("Central identity. Private phone storage. Nearby resilience.", color = Muted, fontSize = 13.sp)
             Spacer(Modifier.height(8.dp))
+            ClayField(peopleQuery, { value -> peopleQuery = value.lowercase(); vm.searchUsers(value) }, "Search people by username", leading = Icons.Rounded.Search)
         }
-        items(conversations, key = { it.id }) { conversation -> ConversationClay(conversation) { open(conversation.id) } }
+        if (peopleQuery.length >= 2) {
+            items(users, key = { "person-${it.id}" }) { user ->
+                ClayCard(ClayWhite, Modifier.clickable { vm.startChat(user) { open(it) } }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
+                        Box(Modifier.clip(RoundedCornerShape(14.dp)).background(Lime).padding(10.dp)) { Icon(Icons.Rounded.ChatBubble, "Start chat", Modifier.size(20.dp)) }
+                    }
+                }
+            }
+            if (users.isEmpty()) item { Text("No matching people found.", color = Muted, modifier = Modifier.padding(10.dp)) }
+        } else {
+            items(conversations, key = { it.id }) { conversation -> ConversationClay(conversation) { open(conversation.id) } }
+        }
     }
 }
 
@@ -502,7 +526,7 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
                 }
                 OutlinedButton(onClick = { messageSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_NOTIFICATION, "Choose message sound")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming message sound") }
                 OutlinedButton(onClick = { callSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_RINGTONE, "Choose call ringtone")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming call ringtone") }
-                Text("You can also choose a different sound from each person's profile.", color = Muted, fontSize = 11.sp)
+                Text("Defaults are active immediately: your phone's notification tone for messages, ringtone for calls, a short sent-message confirmation, and a busy-call tone. You can change message, call, and per-person sounds here later.", color = Muted, fontSize = 11.sp)
             }
         }
         item {
@@ -580,10 +604,29 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     var newCode by remember { mutableStateOf("") }
     var replyTo by remember { mutableStateOf<MessageEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    var searchOpen by remember { mutableStateOf(false) }
+    var chatQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { vm.uploadAttachment(conversationId, it) } }
     val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri -> uri?.let { vm.shareContact(conversationId, it) } }
+    val cameraPicker = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
+        if (captured) cameraUri?.let { vm.uploadAttachment(conversationId, it) }
+    }
+    val displayedMessages = if (chatQuery.isBlank()) messages else messages.filter { message ->
+        message.body.contains(chatQuery, ignoreCase = true) ||
+            message.attachmentName?.contains(chatQuery, ignoreCase = true) == true ||
+            message.sender.contains(chatQuery, ignoreCase = true) ||
+            message.kind.contains(chatQuery, ignoreCase = true)
+    }
+    val showScrollToBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            info.totalItemsCount > 0 && (info.visibleItemsInfo.lastOrNull()?.index ?: -1) < info.totalItemsCount - 1
+        }
+    }
     val send = { replyTo?.let { vm.sendReply(conversationId, text, it) } ?: vm.send(conversationId, text); vm.updateTyping(conversationId, false); text = ""; replyTo = null }
     if (!unlocked) {
         BackHandler { back() }
@@ -626,22 +669,38 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
         while (true) { vm.syncConversation(conversationId); vm.refreshTyping(conversationId); delay(1_000) }
     }
     DisposableEffect(conversationId) { onDispose { vm.updateTyping(conversationId, false) } }
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+    LaunchedEffect(displayedMessages.size, typing, chatQuery) {
+        val target = if (chatQuery.isBlank() && typing.isNotEmpty()) displayedMessages.size else displayedMessages.lastIndex
+        if (target >= 0) listState.scrollToItem(target)
         vm.markConversationRead(conversationId)
     }
     Scaffold(
         containerColor = Canvas,
         topBar = {
-            Row(Modifier.fillMaxWidth().background(Canvas).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
-                Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(conversation?.title ?: "M", 42.dp, Violet, conversation?.avatarUrl); Spacer(Modifier.width(9.dp))
-                    Column { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
+            Column(Modifier.fillMaxWidth().background(Canvas)) {
+                Row(Modifier.fillMaxWidth().padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
+                    Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(conversation?.title ?: "M", 42.dp, Violet, conversation?.avatarUrl); Spacer(Modifier.width(9.dp))
+                        Column { Text(conversation?.title ?: "Conversation", fontWeight = FontWeight.Black); if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(vm.networkLabel(), color = Muted, fontSize = 10.sp) }
+                    }
+                    IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) chatQuery = "" }) { Icon(Icons.Rounded.Search, "Search chat", tint = Violet) }
+                    IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
+                    IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
+                    IconButton(onClick = { if (hasLock) { vm.setChatPasscode(conversationId, null); hasLock = false } else settingLock = true }) { Icon(if (hasLock) Icons.Rounded.LockOpen else Icons.Rounded.Lock, "Chat lock", tint = Violet) }
                 }
-                IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = Violet) }
-                IconButton(onClick = { call(vm.createCall(conversationId, conversation?.title ?: "Mowell call", true)) }) { Icon(Icons.Rounded.Videocam, "Video", tint = Violet) }
-                IconButton(onClick = { if (hasLock) { vm.setChatPasscode(conversationId, null); hasLock = false } else settingLock = true }) { Icon(if (hasLock) Icons.Rounded.LockOpen else Icons.Rounded.Lock, "Chat lock", tint = Violet) }
+                AnimatedVisibility(searchOpen) {
+                    OutlinedTextField(
+                        value = chatQuery,
+                        onValueChange = { chatQuery = it },
+                        placeholder = { Text("Search text or files in this chat") },
+                        leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                        trailingIcon = { IconButton(onClick = { chatQuery = "" }) { Icon(Icons.Rounded.Close, "Clear") } },
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)
+                    )
+                }
             }
         },
         bottomBar = {
@@ -656,6 +715,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                 Box {
                     IconButton(onClick = { attachments = true }) { Icon(Icons.Rounded.AttachFile, "Share", tint = Violet) }
                     DropdownMenu(expanded = attachments, onDismissRequest = { attachments = false }) {
+                        DropdownMenuItem(text = { Text("Camera") }, leadingIcon = { Icon(Icons.Rounded.PhotoCamera, null) }, onClick = {
+                            attachments = false
+                            val directory = File(context.cacheDir, "camera").apply { mkdirs() }
+                            val file = File(directory, "mowell_${System.currentTimeMillis()}.jpg")
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                            cameraUri = uri
+                            cameraPicker.launch(uri)
+                        })
                         DropdownMenuItem(text = { Text("Photo, video or file") }, leadingIcon = { Icon(Icons.Rounded.Description, null) }, onClick = { attachments = false; filePicker.launch("*/*") })
                         DropdownMenuItem(text = { Text("Current location") }, leadingIcon = { Icon(Icons.Rounded.LocationOn, null) }, onClick = { attachments = false; vm.shareLocation(conversationId) })
                         DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Rounded.ContactPhone, null) }, onClick = { attachments = false; contactPicker.launch(null) })
@@ -665,13 +732,29 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                 Spacer(Modifier.width(8.dp)); IconButton(onClick = send, Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(Lime)) { Icon(Icons.Rounded.Send, "Send", tint = Ink) }
                 }
             }
+        },
+        floatingActionButton = {
+            AnimatedVisibility(showScrollToBottom) {
+                FloatingActionButton(
+                    onClick = {
+                        val typingItem = chatQuery.isBlank() && typing.isNotEmpty()
+                        val target = displayedMessages.size + if (typingItem) 1 else 0
+                        if (target > 0) scope.launch { listState.animateScrollToItem(target - 1) }
+                    },
+                    containerColor = Lime,
+                    contentColor = Ink,
+                    shape = RoundedCornerShape(18.dp)
+                ) { Icon(Icons.Rounded.KeyboardArrowDown, "Scroll to latest") }
+            }
         }
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState, contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            items(messages, key = { it.id }) { message ->
+            if (chatQuery.isNotBlank() && displayedMessages.isEmpty()) item(key = "no-search-results") { Text("No matching messages or files", color = Muted, modifier = Modifier.fillMaxWidth().padding(24.dp)) }
+            items(displayedMessages, key = { it.id }) { message ->
                 val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
                 MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { deleteTarget = message }, openAttachment = { vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
             }
+            if (chatQuery.isBlank() && typing.isNotEmpty()) item(key = "typing-indicator") { TypingBubble(typing.joinToString(", ")) }
         }
     }
 }
@@ -681,7 +764,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
 private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.fillMaxWidth(.80f).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = {}, onLongClick = onLongPress).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(12.dp)) {
+        Box(Modifier.fillMaxWidth(.80f).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(12.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 when (message.kind) {
@@ -787,6 +870,22 @@ private fun TypingLine(names: String) {
     Text("$names typing${".".repeat(dots)}", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
 }
 
+@Composable
+private fun TypingBubble(names: String) {
+    var phase by remember(names) { mutableStateOf(0) }
+    LaunchedEffect(names) { while (true) { delay(180); phase = (phase + 1) % 3 } }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+        Column(Modifier.shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(ClayWhite).border(1.dp, Color.White, RoundedCornerShape(18.dp)).padding(horizontal = 15.dp, vertical = 10.dp)) {
+            Text("$names typing", color = Muted, fontSize = 10.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                repeat(3) { index ->
+                    Box(Modifier.padding(top = 5.dp).size(7.dp).graphicsLayer { translationY = if (phase == index) -4f else 0f; alpha = if (phase == index) 1f else .45f }.clip(CircleShape).background(Violet))
+                }
+            }
+        }
+    }
+}
+
 private fun ringtonePicker(type: Int, title: String) = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
     .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, type)
     .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, title)
@@ -794,9 +893,7 @@ private fun ringtonePicker(type: Int, title: String) = Intent(RingtoneManager.AC
     .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
 
 private fun mapUrl(latitude: Double, longitude: Double): String {
-    val delta = 0.006
-    val bbox = listOf(longitude - delta, latitude - delta, longitude + delta, latitude + delta).joinToString("%2C")
-    return "https://www.openstreetmap.org/export/embed.html?bbox=$bbox&layer=mapnik&marker=$latitude%2C$longitude"
+    return "https://maps.google.com/maps?q=$latitude,$longitude&z=16&output=embed"
 }
 
 private fun route(route: String) = when (route) { "INTERNET" -> "INTERNET"; "BLUETOOTH" -> "NEARBY"; "LOCAL_ONLY" -> "SAVED"; else -> route }
