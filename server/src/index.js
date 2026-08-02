@@ -371,6 +371,9 @@ app.post("/v1/contacts/requests", auth, async (req, res) => {
     const incoming = existing.addedBy.toString() !== req.auth.sub;
     return res.status(409).json({ error: incoming ? "This person already sent you a request. Accept it from People" : "Connection request already sent" });
   }
+  // A declined request must get a new ID so Android can notify the recipient
+  // again if the person sends a fresh request later.
+  if (existing?.status === "declined") await existing.deleteOne();
   const request = await Contact.findOneAndUpdate(
     { pairKey },
     { $set: { users: [req.auth.sub, requestedId], addedBy: req.auth.sub, status: "pending", blockedBy: [] } },
@@ -790,6 +793,28 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
     if (justJoined || call.isModified()) await call.save();
     res.json({ ok: true, video: call.video, group: call.participants.length > 2, status: call.status });
   } catch { res.status(400).json({ error: "Could not join call" }); }
+});
+
+// The caller creates the room before the call invitation is delivered. This
+// prevents a recipient from opening the call before camera/WebView startup has
+// finished on the caller's phone.
+app.post("/v1/calls/:room/ring", auth, async (req, res) => {
+  try {
+    const room = String(req.params.room || "").trim();
+    if (!validRoom(room)) return res.status(400).json({ error: "Invalid call room" });
+    const existing = await CallRoom.findOne({ room });
+    if (existing) return res.json({ ok: true, status: existing.status });
+    const conversation = await Conversation.findOne({ _id: req.body.conversationId, members: req.auth.sub });
+    if (!conversation) return res.sendStatus(404);
+    if (await directMessagingBlocked(conversation)) return res.status(403).json({ error: "Calling is unavailable because this contact is blocked" });
+    const busy = await CallRoom.exists({ status: "active", participants: { $in: conversation.members }, expiresAt: { $gt: new Date() } });
+    if (busy) return res.status(409).json({ error: "User is in another call", code: "USER_BUSY" });
+    await CallRoom.create({
+      room, conversation: conversation._id, participants: conversation.members,
+      activeParticipants: [], createdBy: req.auth.sub, video: Boolean(req.body.video)
+    });
+    res.status(201).json({ ok: true, group: conversation.members.length > 2 });
+  } catch { res.status(400).json({ error: "Could not start call" }); }
 });
 
 // Add a username to an active room and place the invitation in a private chat.

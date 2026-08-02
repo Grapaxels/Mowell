@@ -206,7 +206,8 @@ class AuthRepository(context: Context) {
 
     suspend fun respondConnectionRequest(requestId: String, accept: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val builder = Request.Builder().url("$serverUrl/v1/contacts/requests/$requestId")
+            val endpoint = if (accept) "$serverUrl/v1/contacts/requests/$requestId/accept" else "$serverUrl/v1/contacts/requests/$requestId"
+            val builder = Request.Builder().url(endpoint)
                 .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
             val response = client.newCall(if (accept) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()).execute()
             val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
@@ -343,6 +344,16 @@ class AuthRepository(context: Context) {
             val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
             if (!response.isSuccessful) error(json.optString("error", "Could not start conversation"))
             json.getJSONObject("conversation").getString("_id")
+        }
+    }
+
+    suspend fun ringCall(room: String, conversationId: String, video: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("conversationId", conversationId).put("video", video)
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/calls/$room/ring")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not start call"))
         }
     }
 

@@ -82,6 +82,7 @@ class MessageSyncService : Service() {
     private suspend fun syncMessages() {
         val session = auth.savedSession ?: return
         val dao = (application as MowellApplication).database.dao()
+        val callAlerts = getSharedPreferences("mowell_call_alerts", Context.MODE_PRIVATE)
         val remoteConversations = auth.fetchConversations().getOrNull() ?: return
         dao.retainSyncedConversations(remoteConversations.map { it.id }.toSet())
         val hidden = getSharedPreferences("mowell_hidden_messages", Context.MODE_PRIVATE)
@@ -101,18 +102,31 @@ class MessageSyncService : Service() {
             ))
             val fetched = auth.fetchMessages(remote.id, 0L).getOrNull() ?: return@remoteLoop
             val newIncoming = mutableListOf<MessageEntity>()
+            var forcedCallAlert: MessageEntity? = null
             fetched.forEach messageLoop@ { item ->
                 if (hidden.getStringSet(item.conversationId, emptySet()).orEmpty().contains(item.id)) return@messageLoop
                 if (!item.outgoing) latestIncomingTime = maxOf(latestIncomingTime, item.sentAt)
-                if (dao.hasMessage(item.id)) return@messageLoop
+                val alreadyStored = dao.hasMessage(item.id)
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
                     item.body, item.sentAt, item.outgoing, Route.INTERNET.name, "sent", item.kind,
                     item.attachmentId, item.attachmentMime, item.attachmentName
                 )
-                dao.insertMessage(message)
-                if (!item.outgoing) dao.revealConversationOnIncoming(remote.id, item.sentAt)
-                if (!item.outgoing && item.sentAt > notificationFloor) newIncoming += message
+                if (!alreadyStored) {
+                    dao.insertMessage(message)
+                    if (!item.outgoing) dao.revealConversationOnIncoming(remote.id, item.sentAt)
+                    if (!item.outgoing && item.sentAt > notificationFloor) newIncoming += message
+                }
+                // Calls cannot rely only on the message watermark: the service can
+                // start just after an incoming invite was saved. Ring once for any
+                // still-fresh call invite that has not already been alerted.
+                if (!item.outgoing && item.kind == "call" && item.sentAt >= System.currentTimeMillis() - 45_000L) {
+                    val alertKey = "${session.user.id}:${item.id}"
+                    if (!callAlerts.getBoolean(alertKey, false)) {
+                        callAlerts.edit().putBoolean(alertKey, true).apply()
+                        forcedCallAlert = message
+                    }
+                }
             }
             if (latestIncomingTime > notificationFloor) syncState.edit().putLong(watermarkKey, latestIncomingTime).apply()
             fetched.lastOrNull()?.let { last ->
@@ -125,9 +139,11 @@ class MessageSyncService : Service() {
             if (newIncoming.isNotEmpty()) {
                 var unread = 0
                 repeat(newIncoming.count { it.kind != "call_end" }) { unread = dao.incrementUnread(remote.id) }
-                val latest = newIncoming.last()
+                val latest = forcedCallAlert ?: newIncoming.last()
                 if (latest.kind == "call_end") notifier.clearConversation(remote.id)
                 else notifier.show(remote.title, latest, unread.coerceAtLeast(1), remote.avatarUrl)
+            } else if (forcedCallAlert != null) {
+                notifier.show(remote.title, forcedCallAlert!!, 1, remote.avatarUrl)
             }
         }
     }

@@ -21,7 +21,9 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
 import com.grapaxels.mowell.auth.AuthRepository
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.lang.ref.WeakReference
 
@@ -92,7 +94,20 @@ class MowellCallActivity : ComponentActivity() {
                 if (!enterCallPictureInPicture()) moveTaskToBack(true)
             }
         })
-        val permissions = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        if (intent.getBooleanExtra("initiator", false)) {
+            lifecycleScope.launch {
+                AuthRepository(this@MowellCallActivity).ringCall(room, conversationId, videoActive)
+                    .onSuccess { requestCallPermissions() }
+                    .onFailure { showCallStartError(it.message ?: "Could not start call") }
+            }
+        } else requestCallPermissions()
+    }
+
+    private fun requestCallPermissions() {
+        val permissions = buildList {
+            add(Manifest.permission.RECORD_AUDIO)
+            if (videoActive) add(Manifest.permission.CAMERA)
+        }.toTypedArray()
         if (permissions.any { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
             ActivityCompat.requestPermissions(this, permissions, 701)
         } else loadCallPage(authToken, conversationId)
@@ -104,10 +119,15 @@ class MowellCallActivity : ComponentActivity() {
         if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             loadCallPage(authToken, conversationId)
         } else {
-            AlertDialog.Builder(this).setTitle("Camera and microphone required")
-                .setMessage("Allow camera and microphone access to use Mowell calls.")
+            AlertDialog.Builder(this).setTitle("Call permission required")
+                .setMessage("Allow microphone access${if (videoActive) " and camera access" else ""} to use this call.")
                 .setPositiveButton("Close") { _, _ -> finish() }.setOnCancelListener { finish() }.show()
         }
+    }
+
+    private fun showCallStartError(message: String) {
+        AlertDialog.Builder(this).setTitle("Mowell call").setMessage(message)
+            .setPositiveButton("Close") { _, _ -> finish() }.setOnCancelListener { finish() }.show()
     }
 
     private fun loadCallPage(token: String, conversation: String) {
