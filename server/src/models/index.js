@@ -26,6 +26,9 @@ const conversationSchema = new mongoose.Schema({
   members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   admins: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  avatarUrl: String,
+  avatarData: { type: Buffer, select: false },
+  avatarMime: { type: String, select: false },
   lastMessageAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 conversationSchema.index({ members: 1, lastMessageAt: -1 });

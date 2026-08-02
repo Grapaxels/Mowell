@@ -29,7 +29,9 @@ data class ConversationEntity(
     val blocked: Boolean = false,
     val blockedByMe: Boolean = false,
     /** Local-only: hidden conversation tiles stay hidden until a newer incoming message arrives. */
-    val hiddenAt: Long = 0L
+    val hiddenAt: Long = 0L,
+    /** A personal contact label. It is stored only in this phone's SQLite database. */
+    val localTitle: String? = null
 )
 
 data class CachedUser(

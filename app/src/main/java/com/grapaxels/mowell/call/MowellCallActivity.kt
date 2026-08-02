@@ -32,6 +32,7 @@ class MowellCallActivity : ComponentActivity() {
     private lateinit var conversationId: String
     private lateinit var authToken: String
     private var callPageLoaded = false
+    private var videoActive = false
 
     companion object {
         private var current = WeakReference<MowellCallActivity>(null)
@@ -47,6 +48,7 @@ class MowellCallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         room = intent.getStringExtra("room").orEmpty()
         conversationId = intent.getStringExtra("conversation").orEmpty()
+        videoActive = intent.getBooleanExtra("video", false)
         val auth = AuthRepository(this).savedSession
         if (room.isBlank() || conversationId.isBlank() || auth == null) {
             finish()
@@ -129,7 +131,9 @@ class MowellCallActivity : ComponentActivity() {
 
     /** Keep a live call visible when the user leaves the Mowell activity. */
     private fun enterCallPictureInPicture(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !callPageLoaded || isFinishing || isInPictureInPictureMode) return false
+        // Audio calls return to the app normally. PiP is reserved for real video,
+        // avoiding a floating window full of call controls or an avatar placeholder.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !callPageLoaded || !videoActive || isFinishing || isInPictureInPictureMode) return false
         return runCatching {
             enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
         }.getOrDefault(false)
@@ -164,6 +168,7 @@ class MowellCallActivity : ComponentActivity() {
     }
 
     private inner class CallBridge(private val audio: AudioManager) {
+        @JavascriptInterface fun setVideoActive(enabled: Boolean) = runOnUiThread { videoActive = enabled }
         @JavascriptInterface fun setSpeaker(enabled: Boolean) = runOnUiThread { audio.isSpeakerphoneOn = enabled }
         @JavascriptInterface fun finishCall() = runOnUiThread { finish() }
         @JavascriptInterface fun showMessage(message: String) = runOnUiThread {

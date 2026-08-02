@@ -33,8 +33,12 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
     suspend fun upsertConversation(conversation: ConversationEntity) = withContext(Dispatchers.IO) {
         // Network syncs do not know about a user's local hide choice. Preserve it
         // until revealConversationOnIncoming receives a genuinely new incoming item.
-        val existingHiddenAt = loadConversation(conversation.id)?.hiddenAt ?: 0L
+        val existing = loadConversation(conversation.id)
+        val existingHiddenAt = existing?.hiddenAt ?: 0L
         val hiddenAt = if (conversation.hiddenAt > 0L) conversation.hiddenAt else existingHiddenAt
+        // The server owns group titles and account names; a direct-contact alias belongs
+        // exclusively to this device and must survive every remote sync.
+        val localTitle = if (conversation.isGroup) null else conversation.localTitle ?: existing?.localTitle
         val values = ContentValues().apply {
             put("id", conversation.id)
             put("title", conversation.title)
@@ -49,6 +53,7 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("blocked", if (conversation.blocked) 1 else 0)
             put("blockedByMe", if (conversation.blockedByMe) 1 else 0)
             put("hiddenAt", hiddenAt)
+            put("localTitle", localTitle)
         }
         db().insertWithOnConflict("conversations", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         conversations.value = loadConversations()
@@ -245,7 +250,8 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount")),
         cursor.getInt(cursor.getColumnIndexOrThrow("blocked")) == 1,
         cursor.getInt(cursor.getColumnIndexOrThrow("blockedByMe")) == 1,
-        cursor.getLong(cursor.getColumnIndexOrThrow("hiddenAt"))
+        cursor.getLong(cursor.getColumnIndexOrThrow("hiddenAt")),
+        cursor.getString(cursor.getColumnIndexOrThrow("localTitle"))
     )
 
     private fun loadMessages(conversationId: String): List<MessageEntity> = db().query(

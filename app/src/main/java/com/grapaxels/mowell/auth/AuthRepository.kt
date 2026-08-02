@@ -260,6 +260,28 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun updateGroupTitle(conversationId: String, title: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("title", title.trim())
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").patch(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not update group name"))
+        }
+    }
+
+    suspend fun updateGroupAvatar(conversationId: String, data: ByteArray, mimeType: String = "image/jpeg"): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(data.size <= 1_572_864) { "Group icon must be 1.5 MB or smaller" }
+            val body = JSONObject().put("mimeType", mimeType).put("data", Base64.encodeToString(data, Base64.NO_WRAP))
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/avatar")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not update group icon"))
+            json.optString("avatarUrl")
+        }
+    }
+
     suspend fun fetchGroupMembers(conversationId: String): Result<GroupMemberState> = withContext(Dispatchers.IO) {
         runCatching {
             val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/members")
@@ -356,7 +378,8 @@ class AuthRepository(context: Context) {
                             }
                         }
                         val title = if (isGroup) item.optString("title").ifBlank { "Mowell group" } else directName
-                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt")), directUsername, directAvatar, directLastSeen, memberNames.joinToString(", "), item.optBoolean("blocked"), item.optBoolean("blockedByMe")))
+                        val avatar = if (isGroup) item.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" } else directAvatar
+                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt")), directUsername, avatar, directLastSeen, memberNames.joinToString(", "), item.optBoolean("blocked"), item.optBoolean("blockedByMe")))
                     }
                 }
             }

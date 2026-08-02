@@ -18,7 +18,7 @@ import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import com.grapaxels.mowell.MainActivity
 import com.grapaxels.mowell.R
-import com.grapaxels.mowell.call.MowellCallActivity
+import com.grapaxels.mowell.call.IncomingCallActivity
 import com.grapaxels.mowell.data.MessageEntity
 import org.json.JSONObject
 
@@ -69,21 +69,32 @@ class MessageNotifier(private val context: Context) {
             val video = data?.optBoolean("video") ?: false
             val group = data?.optBoolean("group") ?: false
             if (room.isNotBlank()) {
-                val accept = Intent(context, MowellCallActivity::class.java).apply {
+                val incoming = Intent(context, IncomingCallActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                     putExtra("conversation", message.conversationId); putExtra("name", conversationTitle)
                     putExtra("room", room); putExtra("video", video); putExtra("group", group); putExtra("initiator", false)
                     putExtra("avatar", avatarUrl)
                     putExtra("notification_id", notificationId)
                 }
-                val acceptPending = PendingIntent.getActivity(context, notificationId, accept, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                val acceptPending = PendingIntent.getActivity(context, notificationId, incoming, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 val decline = Intent(context, NotificationActionReceiver::class.java).apply {
                     action = NotificationActionReceiver.ACTION_DECLINE
                     putExtra(NotificationActionReceiver.EXTRA_ROOM, room)
                     putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION, notificationId)
                 }
                 val declinePending = PendingIntent.getBroadcast(context, notificationId + 1, decline, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                builder.addAction(0, "Decline", declinePending).addAction(0, "Accept", acceptPending).setOngoing(true).setTimeoutAfter(45_000)
+                val replyDecline = Intent(context, NotificationActionReceiver::class.java).apply {
+                    action = NotificationActionReceiver.ACTION_DECLINE_WITH_REPLY
+                    putExtra(NotificationActionReceiver.EXTRA_ROOM, room)
+                    putExtra(NotificationActionReceiver.EXTRA_CONVERSATION, message.conversationId)
+                    putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION, notificationId)
+                }
+                val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+                val replyPending = PendingIntent.getBroadcast(context, notificationId + 2, replyDecline, PendingIntent.FLAG_UPDATE_CURRENT or mutable)
+                val remoteInput = RemoteInput.Builder(NotificationActionReceiver.KEY_REPLY).setLabel("Reply to $conversationTitle").build()
+                builder.addAction(0, "Decline", declinePending)
+                    .addAction(NotificationCompat.Action.Builder(0, "Reply & decline", replyPending).addRemoteInput(remoteInput).build())
+                    .addAction(0, "Accept", acceptPending).setFullScreenIntent(acceptPending, true).setOngoing(true).setTimeoutAfter(45_000)
             }
         } else if (message.kind != "call_end") {
             val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {

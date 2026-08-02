@@ -472,6 +472,39 @@ app.post("/v1/conversations", auth, async (req, res) => {
   res.status(201).json({ conversation });
 });
 
+// Group identity is shared by every member. Admins may update it, while direct
+// contact labels remain deliberately local to each member's device.
+app.patch("/v1/conversations/:id", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can edit the group" });
+  const title = String(req.body.title || "").trim();
+  if (title.length < 2 || title.length > 80) return res.status(400).json({ error: "Group name must be 2 to 80 characters" });
+  conversation.title = title;
+  await conversation.save();
+  res.json({ conversation: conversation.toObject() });
+});
+
+app.post("/v1/conversations/:id/avatar", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can change the group icon" });
+  const mimeType = String(req.body.mimeType || "image/jpeg").toLowerCase();
+  if (!/^image\/(jpeg|png|webp)$/.test(mimeType)) return res.status(400).json({ error: "Use a JPEG, PNG, or WebP image" });
+  let data;
+  try { data = Buffer.from(String(req.body.data || ""), "base64"); } catch (_) { return res.status(400).json({ error: "Invalid group icon data" }); }
+  if (!data.length || data.length > 1_572_864) return res.status(400).json({ error: "Group icon must be 1.5 MB or smaller" });
+  conversation.avatarData = data;
+  conversation.avatarMime = mimeType;
+  conversation.avatarUrl = `/v1/conversations/${conversation._id}/avatar?v=${Date.now()}`;
+  await conversation.save();
+  res.json({ avatarUrl: conversation.avatarUrl });
+});
+
+app.get("/v1/conversations/:id/avatar", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub }).select("+avatarData +avatarMime avatarUrl");
+  if (!conversation || !conversation.avatarData?.length) return res.sendStatus(404);
+  res.type(conversation.avatarMime || "image/jpeg").set("Cache-Control", "private, max-age=86400").send(conversation.avatarData);
+});
+
 app.post("/v1/conversations/:id/members", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
   if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can add people" });

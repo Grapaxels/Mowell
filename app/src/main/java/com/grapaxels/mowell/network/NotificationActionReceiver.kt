@@ -33,7 +33,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                             InternetTransport(app).send(conversation, payload)
                         }
                     }
-                    ACTION_DECLINE -> {
+                    ACTION_DECLINE, ACTION_DECLINE_WITH_REPLY -> {
                         val room = intent.getStringExtra(EXTRA_ROOM).orEmpty()
                         val auth = AuthRepository(app)
                         val token = auth.savedSession?.token
@@ -41,6 +41,15 @@ class NotificationActionReceiver : BroadcastReceiver() {
                             val body = JSONObject().put("type", "leave").put("payload", JSONObject().put("reason", "declined")).toString()
                             OkHttpClient().newCall(Request.Builder().url("${auth.serverUrl}/v1/calls/$room/signals")
                                 .header("Authorization", "Bearer $token").post(body.toRequestBody("application/json".toMediaType())).build()).execute().close()
+                        }
+                        val reply = if (intent.action == ACTION_DECLINE_WITH_REPLY) {
+                            RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)?.toString()?.trim()
+                                ?: intent.getStringExtra(EXTRA_REPLY_TEXT)?.trim()
+                        } else null
+                        val conversation = intent.getStringExtra(EXTRA_CONVERSATION).orEmpty()
+                        if (!reply.isNullOrBlank() && conversation.isNotBlank()) {
+                            val payload = JSONObject().put("clientId", UUID.randomUUID().toString()).put("body", reply).put("kind", "text").toString()
+                            InternetTransport(app).send(conversation, payload)
                         }
                     }
                     ACTION_ACCEPT_CONNECTION, ACTION_DECLINE_CONNECTION -> {
@@ -62,6 +71,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_REPLY = "com.grapaxels.mowell.REPLY"
         const val ACTION_DECLINE = "com.grapaxels.mowell.DECLINE_CALL"
+        const val ACTION_DECLINE_WITH_REPLY = "com.grapaxels.mowell.DECLINE_CALL_WITH_REPLY"
         const val ACTION_ACCEPT_CONNECTION = "com.grapaxels.mowell.ACCEPT_CONNECTION"
         const val ACTION_DECLINE_CONNECTION = "com.grapaxels.mowell.DECLINE_CONNECTION"
         const val ACTION_ACCEPT_GROUP = "com.grapaxels.mowell.ACCEPT_GROUP"
@@ -70,6 +80,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
         const val EXTRA_CONVERSATION = "conversation"
         const val EXTRA_ROOM = "room"
         const val EXTRA_NOTIFICATION = "notification_id"
+        const val EXTRA_REPLY_TEXT = "reply_text"
         const val EXTRA_REQUEST = "connection_request_id"
         const val EXTRA_INVITATION = "group_invitation_id"
     }

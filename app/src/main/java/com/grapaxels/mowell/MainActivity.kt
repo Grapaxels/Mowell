@@ -9,6 +9,9 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.location.LocationManager
+import android.location.Location
+import android.location.LocationListener
+import android.os.Looper
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.media.ToneGenerator
@@ -54,6 +57,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.io.ByteArrayOutputStream
@@ -351,10 +356,34 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val manager = getApplication<Application>().getSystemService(Context.LOCATION_SERVICE) as LocationManager
             val location = try {
                 if (androidx.core.content.ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) null
-                else listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }.maxByOrNull { it.time }
+                else {
+                    val cached = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                        .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
+                        .maxByOrNull { it.time }
+                    // A stale or empty cache made location sharing look broken on many phones.
+                    // Ask Android for one fresh fix first, then fall back to a recent cached fix.
+                    currentLocation(manager) ?: cached
+                }
             } catch (_: SecurityException) { null }
-            if (location == null) return@launch
+            if (location == null) { _authError.value = "Location is unavailable. Turn on location and try again."; return@launch }
             sendTyped(conversationId, JSONObject().put("latitude", location.latitude).put("longitude", location.longitude).toString(), "location")
+        }
+    }
+
+    private suspend fun currentLocation(manager: LocationManager): Location? = withTimeoutOrNull(12_000) {
+        suspendCancellableCoroutine { continuation ->
+            val provider = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                .firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+            if (provider == null) { continuation.resume(null) {}; return@suspendCancellableCoroutine }
+            lateinit var listener: LocationListener
+            listener = LocationListener { location ->
+                if (continuation.isActive) continuation.resume(location) {}
+                manager.removeUpdates(listener)
+            }
+            try {
+                manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+                continuation.invokeOnCancellation { manager.removeUpdates(listener) }
+            } catch (_: SecurityException) { if (continuation.isActive) continuation.resume(null) {} }
         }
     }
 
@@ -749,23 +778,52 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     fun updateProfilePicture(uri: Uri) {
         viewModelScope.launch {
             val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                runCatching {
-                    val bitmap = getApplication<Application>().contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
-                        ?: error("Could not read image")
-                    val longest = maxOf(bitmap.width, bitmap.height)
-                    val scaled = if (longest > 1024) {
-                        val ratio = 1024f / longest
-                        Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
-                    } else bitmap
-                    val output = ByteArrayOutputStream()
-                    scaled.compress(Bitmap.CompressFormat.JPEG, 84, output)
-                    if (scaled !== bitmap) scaled.recycle()
-                    bitmap.recycle()
-                    output.toByteArray()
-                }.fold(onSuccess = { auth.updateAvatar(it) }, onFailure = { AuthResult(error = it.message) })
+                runCatching { compressedImage(uri) }.fold(onSuccess = { auth.updateAvatar(it) }, onFailure = { AuthResult(error = it.message) })
             }
             if (result.session != null) _session.value = result.session else _authError.value = result.error
         }
+    }
+
+    fun updateGroupName(conversationId: String, title: String) {
+        viewModelScope.launch {
+            auth.updateGroupTitle(conversationId, title).onSuccess { syncAllConversations() }
+                .onFailure { _authError.value = it.message ?: "Could not update group name" }
+        }
+    }
+
+    fun updateGroupPicture(conversationId: String, uri: Uri) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                runCatching { compressedImage(uri) }.fold(
+                    onSuccess = { auth.updateGroupAvatar(conversationId, it) },
+                    onFailure = { Result.failure<String>(it) }
+                )
+            }
+            result.onSuccess { syncAllConversations() }.onFailure { _authError.value = it.message ?: "Could not update group icon" }
+        }
+    }
+
+    /** Saves a private alias for a direct contact; no server request is made. */
+    fun setLocalContactName(conversationId: String, name: String) {
+        viewModelScope.launch {
+            val conversation = dao.getConversation(conversationId) ?: return@launch
+            if (!conversation.isGroup) dao.upsertConversation(conversation.copy(localTitle = name.trim().take(80).ifBlank { null }))
+        }
+    }
+
+    private fun compressedImage(uri: Uri): ByteArray {
+        val bitmap = getApplication<Application>().contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+            ?: error("Could not read image")
+        val longest = maxOf(bitmap.width, bitmap.height)
+        val scaled = if (longest > 1024) {
+            val ratio = 1024f / longest
+            Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+        } else bitmap
+        val output = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 84, output)
+        if (scaled !== bitmap) scaled.recycle()
+        bitmap.recycle()
+        return output.toByteArray()
     }
 
     fun isChatLocked(conversationId: String) = chatLocks.contains(conversationId)
