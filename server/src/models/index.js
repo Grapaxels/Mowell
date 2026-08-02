@@ -105,6 +105,9 @@ const callRoomSchema = new mongoose.Schema({
   room: { type: String, required: true, unique: true, maxlength: 100 },
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true },
   participants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
+  // Invited members stay in `participants` for authorization. This separate
+  // list represents people actually connected to the live WebRTC call.
+  activeParticipants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   video: { type: Boolean, default: false },
   status: { type: String, enum: ["ringing", "active", "ended"], default: "ringing", index: true },

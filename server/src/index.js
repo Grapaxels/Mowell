@@ -739,7 +739,7 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
         );
         return res.status(409).json({ error: "User is in another call", code: "USER_BUSY" });
       }
-      call = await CallRoom.create({ room, conversation: conversation._id, participants: conversation.members, createdBy: req.auth.sub, video: Boolean(req.body.video) });
+      call = await CallRoom.create({ room, conversation: conversation._id, participants: conversation.members, activeParticipants: [req.auth.sub], createdBy: req.auth.sub, video: Boolean(req.body.video) });
     }
     const callConversation = await Conversation.findById(call.conversation);
     if (await directMessagingBlocked(callConversation)) return res.status(403).json({ error: "Calling is unavailable because this contact is blocked" });
@@ -749,9 +749,12 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
       await endCall(call, "no_answer");
       return res.status(410).json({ error: "User didn't respond", code: "NO_ANSWER" });
     }
+    const justJoined = !(call.activeParticipants || []).some((id) => id.toString() === req.auth.sub);
+    if (justJoined) call.activeParticipants.push(req.auth.sub);
     if (call.status === "ringing" && call.createdBy.toString() !== req.auth.sub) {
-      call.status = "active"; call.answeredAt = new Date(); await call.save();
+      call.status = "active"; call.answeredAt = new Date();
     }
+    if (justJoined || call.isModified()) await call.save();
     res.json({ ok: true, video: call.video, group: call.participants.length > 2, status: call.status });
   } catch { res.status(400).json({ error: "Could not join call" }); }
 });
@@ -799,8 +802,16 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
     const target = req.body.target ? String(req.body.target) : null;
     if (target && !call.participants.some((id) => id.toString() === target)) return res.sendStatus(403);
     const signal = await CallSignal.create({ room, sender: req.auth.sub, target, type, payload: req.body.payload || {} });
-    if (type === "leave" && (call.participants.length <= 2 || req.body.payload?.reason === "no_answer")) {
-      await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
+    if (type === "leave") {
+      call.activeParticipants = (call.activeParticipants || []).filter((id) => id.toString() !== req.auth.sub);
+      // A 3+ person call continues for the remaining 3+ connected members.
+      // As soon as only two (or fewer) active users remain, it becomes a
+      // one-to-one call and closes for everyone, as requested.
+      if (call.activeParticipants.length <= 2 || req.body.payload?.reason === "no_answer") {
+        await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
+      } else {
+        await call.save();
+      }
     }
     res.status(201).json({ id: signal._id.toString() });
   } catch { res.status(400).json({ error: "Could not send call signal" }); }
