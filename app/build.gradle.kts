@@ -12,8 +12,8 @@ android {
         applicationId = "com.grapaxels.mowell"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.5.4"
+        versionCode = 21
+        versionName = "1.5.5"
         buildConfigField("boolean", "SELF_UPDATE", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -42,7 +42,9 @@ android {
         create("direct") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
-            buildConfigField("boolean", "SELF_UPDATE", "true")
+            // Sideloaded packages must not silently become app installers.
+            // Updates are handled by Google Play once the app is published.
+            buildConfigField("boolean", "SELF_UPDATE", "false")
         }
     }
     compileOptions {
