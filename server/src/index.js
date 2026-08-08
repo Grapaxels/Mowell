@@ -7,11 +7,12 @@ import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
+import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { CallRoom, CallSignal, Contact, Conversation, GroupInvitation, Media, Message, TypingState, User } from "./models/index.js";
+import { CallRoom, CallSignal, Contact, Conversation, GroupInvitation, LinkedDevice, LinkSession, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -21,9 +22,19 @@ if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must contain
 if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { autoIndex: true });
 await Contact.updateMany({ status: { $exists: false } }, { $set: { status: "accepted" } });
 const app = express();
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "blob:"], mediaSrc: ["'self'", "blob:"],
+      connectSrc: ["'self'", "https://mowell-api.grapaxels.in", "https://mowellweb.grapaxels.in"]
+    }
+  }
+}));
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 app.use(express.json({ limit: "4mb" }));
+const webRoot = fileURLToPath(new URL("../web", import.meta.url));
+app.use(express.static(webRoot, { index: "index.html", maxAge: "5m" }));
 
 const publicUser = (user) => ({
   id: user._id.toString(), username: user.username, email: user.email,
@@ -37,6 +48,11 @@ const directoryUser = (user) => ({
 // Mobile sessions intentionally persist until the user chooses Log out.
 // Rotate JWT_SECRET to revoke all sessions after a security incident.
 const issueToken = (user) => jwt.sign({ sub: user._id.toString(), username: user.username }, process.env.JWT_SECRET, { issuer: "mowell-api" });
+const issueWebToken = (user, deviceId) => jwt.sign(
+  { sub: user._id.toString(), username: user.username, kind: "web", device: deviceId },
+  process.env.JWT_SECRET,
+  { issuer: "mowell-api" }
+);
 const usernamePattern = /^[a-z0-9_]{3,24}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -58,6 +74,12 @@ const disposableDomains = new Set([
   ...String(process.env.BLOCKED_EMAIL_DOMAINS || "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean)
 ]);
 const emailCodeHash = (email, code) => crypto.createHmac("sha256", process.env.JWT_SECRET).update(`${email}:${code}`).digest("hex");
+const linkSecretHash = (sessionId, secret) => crypto.createHmac("sha256", process.env.JWT_SECRET).update(`${sessionId}:${secret}`).digest("hex");
+const safeHashMatch = (actual, expected) => {
+  const first = Buffer.from(String(actual || ""), "hex");
+  const second = Buffer.from(String(expected || ""), "hex");
+  return first.length > 0 && first.length === second.length && crypto.timingSafeEqual(first, second);
+};
 const smtpSettings = () => {
   const user = String(process.env.SMTP_USER || process.env.EMAIL_USER || process.env.MAIL_USER || "").trim();
   // Google displays App Passwords in groups. Removing whitespace makes either
@@ -146,6 +168,13 @@ const auth = async (req, res, next) => {
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
     if (!token) return res.status(401).json({ error: "Authentication required" });
     req.auth = jwt.verify(token, process.env.JWT_SECRET, { issuer: "mowell-api" });
+    if (req.auth.kind === "web") {
+      const linked = await LinkedDevice.findOne({ deviceId: req.auth.device, user: req.auth.sub, revokedAt: null });
+      if (!linked) return res.status(401).json({ error: "This linked device was signed out" });
+      if (!linked.lastSeenAt || Date.now() - linked.lastSeenAt.getTime() > 30_000) {
+        linked.lastSeenAt = new Date(); await linked.save();
+      }
+    }
     const user = await User.findById(req.auth.sub).select("email emailVerified");
     if (!user) return res.status(401).json({ error: "Account not found" });
     if (!user.emailVerified) return res.status(403).json({ error: "Verify your email to continue", verificationRequired: true, email: user.email });
@@ -186,6 +215,84 @@ app.get("/v1/app/version", (req, res) => res.json({
   sha256: process.env.ANDROID_APK_SHA256 || null,
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
+
+// A browser creates a short-lived pairing session. The QR contains a random
+// secret; account credentials and mobile JWTs are never placed in the code.
+app.post("/v1/link/sessions", async (req, res) => {
+  try {
+    const sessionId = crypto.randomBytes(18).toString("hex");
+    const secret = crypto.randomBytes(24).toString("base64url");
+    let pairingCode;
+    do { pairingCode = crypto.randomBytes(5).toString("hex").toUpperCase(); }
+    while (await LinkSession.exists({ pairingCode }));
+    const requestedName = String(req.body.deviceName || "Mowell Web").trim().slice(0, 80) || "Mowell Web";
+    const userAgent = String(req.body.userAgent || req.headers["user-agent"] || "").slice(0, 300);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    await LinkSession.create({
+      sessionId, pairingCode, secretHash: linkSecretHash(sessionId, secret),
+      requestedName, userAgent, expiresAt
+    });
+    const payload = `mowell://link?session=${encodeURIComponent(sessionId)}&secret=${encodeURIComponent(secret)}`;
+    const qrDataUrl = await QRCode.toDataURL(payload, { width: 320, margin: 2, errorCorrectionLevel: "M", color: { dark: "#17151D", light: "#FFFFFF" } });
+    res.status(201).json({ sessionId, secret, pairingCode, payload, qrDataUrl, expiresAt });
+  } catch { res.status(500).json({ error: "Could not create a linking code" }); }
+});
+
+app.get("/v1/link/sessions/:sessionId", async (req, res) => {
+  const secret = String(req.query.secret || "");
+  const session = await LinkSession.findOne({ sessionId: req.params.sessionId }).select("+secretHash +webToken").populate("user");
+  if (!session || session.expiresAt < new Date()) return res.status(410).json({ error: "This linking code expired" });
+  if (!safeHashMatch(linkSecretHash(session.sessionId, secret), session.secretHash)) return res.status(403).json({ error: "Invalid linking secret" });
+  if (session.status !== "approved" || !session.webToken || !session.user) return res.json({ status: "pending", expiresAt: session.expiresAt });
+  res.json({ status: "approved", token: session.webToken, user: publicUser(session.user) });
+});
+
+app.post("/v1/linked-devices/approve", auth, async (req, res) => {
+  try {
+    const raw = String(req.body.payload || req.body.code || "").trim();
+    let sessionId = "", secret = "", pairingCode = "";
+    if (/^mowell:\/\/link\?/i.test(raw)) {
+      const parsed = new URL(raw);
+      sessionId = parsed.searchParams.get("session") || "";
+      secret = parsed.searchParams.get("secret") || "";
+    } else pairingCode = raw.replace(/[^a-fA-F0-9]/g, "").toUpperCase();
+    const session = await LinkSession.findOne(sessionId ? { sessionId } : { pairingCode }).select("+secretHash +webToken");
+    if (!session || session.expiresAt < new Date()) return res.status(410).json({ error: "This linking code expired" });
+    if (sessionId && !safeHashMatch(linkSecretHash(session.sessionId, secret), session.secretHash)) return res.status(403).json({ error: "Invalid linking code" });
+    if (session.status === "approved") return res.status(409).json({ error: "This browser is already linked" });
+    const user = await User.findById(req.auth.sub);
+    if (!user) return res.sendStatus(404);
+    const deviceId = crypto.randomUUID();
+    const linked = await LinkedDevice.create({
+      user: user._id, deviceId, name: session.requestedName,
+      platform: "Web", userAgent: session.userAgent, lastSeenAt: new Date()
+    });
+    session.status = "approved";
+    session.user = user._id;
+    session.linkedDevice = linked._id;
+    session.webToken = issueWebToken(user, deviceId);
+    await session.save();
+    res.json({ ok: true, device: { id: linked._id.toString(), name: linked.name, platform: linked.platform, lastSeenAt: linked.lastSeenAt } });
+  } catch { res.status(400).json({ error: "Could not link this browser" }); }
+});
+
+app.get("/v1/linked-devices", auth, async (req, res) => {
+  const devices = await LinkedDevice.find({ user: req.auth.sub, revokedAt: null }).sort({ lastSeenAt: -1 }).lean();
+  res.json({ devices: devices.map((device) => ({
+    id: device._id.toString(), deviceId: device.deviceId, name: device.name,
+    platform: device.platform, lastSeenAt: device.lastSeenAt, createdAt: device.createdAt,
+    current: req.auth.kind === "web" && req.auth.device === device.deviceId
+  })) });
+});
+
+app.delete("/v1/linked-devices/:id", auth, async (req, res) => {
+  const device = await LinkedDevice.findOneAndUpdate(
+    { _id: req.params.id, user: req.auth.sub, revokedAt: null },
+    { $set: { revokedAt: new Date() } }, { new: true }
+  );
+  if (!device) return res.sendStatus(404);
+  res.json({ ok: true });
+});
 
 app.post("/v1/auth/register", async (req, res) => {
   try {

@@ -45,6 +45,10 @@
         <activity android:name=".MowellMapActivity" android:exported="false" />
         <activity android:name=".MowellAttachmentActivity" android:exported="false" />
         <activity
+            android:name=".call.MowellQrScannerActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
             android:name=".call.MowellCallActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="false"

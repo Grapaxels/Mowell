@@ -8,10 +8,10 @@ JWT_SECRET=GENERATE_A_RANDOM_SECRET_OF_AT_LEAST_32_CHARACTERS
 GOOGLE_CLIENT_ID=YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com
 ALLOWED_ORIGIN=*
 PUBLIC_BASE_URL=https://mowell-api.grapaxels.in
-ANDROID_VERSION_CODE=38
-ANDROID_VERSION_NAME=2.3.8
+ANDROID_VERSION_CODE=39
+ANDROID_VERSION_NAME=2.3.9
 ANDROID_APK_URL=https://mowell-api.grapaxels.in/v1/app/apk
-ANDROID_APK_SHA256=1B9894CBFAD07F7E3EDEAF8E0437FDC4798DFC19A79B517F07D9AA1B9F4E01E1
+ANDROID_APK_SHA256=6C6B020695B10D0147B4C6FBB8B70F7BF7E0FAD73EF5A31A350FAE726F7291AB
 ANDROID_UPDATE_REQUIRED=false
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
@@ -25,6 +25,12 @@ BLOCKED_EMAIL_DOMAINS=optional-extra-domain.example,another-temp-domain.example
 `MONGO_URI` is also accepted as an alternative name for `MONGODB_URI`, but configure only one. `GOOGLE_CLIENT_ID` is optional until Google OAuth is set up. `SMTP_PASS` must be a 16-character Google App Password created after enabling 2-Step Verification, not your normal Gmail password. Spaces in a pasted App Password are accepted. `EMAIL_USER`/`EMAIL_APP_PASSWORD` and `MAIL_USER`/`MAIL_PASS` are also accepted aliases. Do not add `PORT` on Vercel; Vercel manages it. Redeploy after changing variables.
 
 The deploy includes `server/assets/Mowell.apk` and serves it from `/v1/app/apk`, so the in-app updater no longer depends on a separately created GitHub Release. For every future update, replace that APK, increase `ANDROID_VERSION_CODE`, update its SHA-256, push, and redeploy the server.
+
+Deploy the complete `server` folder and add both custom domains to the same
+Vercel project: `mowell-api.grapaxels.in` and `mowellweb.grapaxels.in`. The
+second domain serves Mowell Web and uses the same API and MongoDB data. No extra
+environment variable is required for linked devices; temporary QR sessions and
+revocable browser-device records use `MONGODB_URI` and `JWT_SECRET`.
 
 After deployment, open `https://mowell-api.grapaxels.in/health/email`. It should return `"configured":true`. The endpoint never returns the email address or password.
 

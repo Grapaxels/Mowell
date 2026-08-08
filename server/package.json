@@ -15,7 +15,8 @@
     "google-auth-library": "9.15.1",
     "helmet": "8.0.0",
     "jsonwebtoken": "9.0.2",
-    "mongoose": "8.9.5"
-    ,"nodemailer": "6.9.16"
+    "mongoose": "8.9.5",
+    "nodemailer": "6.9.16",
+    "qrcode": "1.5.4"
   }
 }

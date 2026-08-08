@@ -180,6 +180,7 @@ import com.grapaxels.mowell.BuildConfig
 import com.grapaxels.mowell.MowellMapActivity
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.auth.GroupMember
+import com.grapaxels.mowell.call.MowellQrScannerActivity
 import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -459,7 +460,7 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
         nearbyOpen -> Scaffold(containerColor = Canvas, topBar = { CometBackHeader("Nearby", { nearbyOpen = false }) }) { padding -> NearbyScreen(vm, Modifier.padding(padding)) }
         appPanel == AppPanel.PROFILE -> OwnProfileScreen(vm, { appPanel = null }) { appPanel = null; settingsOpen = true }
         appPanel == AppPanel.LISTS -> ListsScreen(vm, { appPanel = null }) { conversationId -> appPanel = null; openChat = conversationId }
-        appPanel == AppPanel.LINKED_DEVICES -> LinkedDevicesScreen({ appPanel = null })
+        appPanel == AppPanel.LINKED_DEVICES -> LinkedDevicesScreen(vm) { appPanel = null }
         callInfo != null -> CallInfoScreen(vm, callInfo!!, { callInfo = null }) { vm.launchCall(context, it) }
         profile != null -> ProfileScreen(vm, profile!!, { profile = null })
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
@@ -640,7 +641,7 @@ private fun ListsScreen(vm: MowellViewModel, back: () -> Unit, openChat: (String
                     }
                 }
                 items(lists, key = { "list-${it.id}" }) { list ->
-                    Row(Modifier.fillMaxWidth().height(72.dp).clickable { selectedListId = list.id }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).clickable { selectedListId = list.id }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Forum, null, tint = Violet) }
                         Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(list.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp); Text("${list.conversationIds.size} chats", color = Muted, fontSize = 14.sp) }
                         Icon(Icons.Rounded.ChevronRight, null, tint = Muted)
@@ -657,26 +658,58 @@ private fun ListsScreen(vm: MowellViewModel, back: () -> Unit, openChat: (String
 }
 
 @Composable
-private fun LinkedDevicesScreen(back: () -> Unit) {
-    var linkInfo by remember { mutableStateOf(false) }
-    if (linkInfo) AlertDialog(
-        onDismissRequest = { linkInfo = false },
-        title = { Text("Link a device") },
-        text = { Text("Secure pairing requires another signed-in Mowell device. Open Linked devices there and scan the pairing code when multi-device pairing is enabled on your server.") },
-        confirmButton = { Button(onClick = { linkInfo = false }) { Text("Got it") } }
-    )
+private fun LinkedDevicesScreen(vm: MowellViewModel, back: () -> Unit) {
+    val context = LocalContext.current
+    val devices by vm.linkedDevices.collectAsStateWithLifecycle()
+    val status by vm.linkedDeviceStatus.collectAsStateWithLifecycle()
+    val scanner = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.getStringExtra(MowellQrScannerActivity.RESULT_PAYLOAD)?.let(vm::linkWebDevice)
+        }
+    }
+    LaunchedEffect(Unit) { vm.refreshLinkedDevices() }
+    status?.let { message ->
+        AlertDialog(
+            onDismissRequest = vm::clearLinkedDeviceStatus,
+            title = { Text("Linked devices") },
+            text = { Text(message) },
+            confirmButton = { Button(onClick = vm::clearLinkedDeviceStatus) { Text("Done") } }
+        )
+    }
     Scaffold(containerColor = Canvas, topBar = { CometBackHeader("Linked devices", back) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().background(Canvas).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.size(92.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Wifi, null, tint = Violet, modifier = Modifier.size(42.dp)) }
-            Spacer(Modifier.height(18.dp)); Text("Use Mowell on your other devices", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(7.dp)); Text("Messages stay protected and this phone remains your primary device.", color = Muted, fontSize = 14.sp)
-            Button(onClick = { linkInfo = true }, Modifier.fillMaxWidth().padding(vertical = 20.dp).height(48.dp), shape = RoundedCornerShape(8.dp)) { Text("Link a device") }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-            Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Person, null, tint = Violet, modifier = Modifier.size(28.dp)); Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) { Text("This phone", fontWeight = FontWeight.SemiBold); Text("${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}", color = Muted, fontSize = 12.sp) }
-                Text("Active", color = Color(0xFF09C26F), fontSize = 12.sp)
+        LazyColumn(Modifier.padding(padding).fillMaxSize().background(Canvas), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp)) {
+            item {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(84.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Wifi, null, tint = Violet, modifier = Modifier.size(38.dp)) }
+                    Spacer(Modifier.height(14.dp)); Text("Use Mowell on your computer", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp)); Text("Open mowellweb.grapaxels.in and scan its QR code. You can log out any browser below.", color = Muted, fontSize = 13.sp)
+                    Button(
+                        onClick = { scanner.launch(Intent(context, MowellQrScannerActivity::class.java)) },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp).height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Icon(Icons.Rounded.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("Link a device") }
+                }
             }
+            item {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Person, null, tint = Violet, modifier = Modifier.size(28.dp)); Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) { Text("This phone", fontWeight = FontWeight.SemiBold); Text("${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}", color = Muted, fontSize = 12.sp) }
+                    Text("Active", color = Color(0xFF09C26F), fontSize = 12.sp)
+                }
+            }
+            items(devices, key = { "linked-device-${it.id}" }) { device ->
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                Row(Modifier.fillMaxWidth().heightIn(min = 74.dp).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Wifi, null, tint = Violet, modifier = Modifier.size(28.dp)); Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(device.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text("${device.platform} · ${SimpleDateFormat("dd MMM, h:mm a", Locale.getDefault()).format(Date(device.lastSeenAt))}", color = Muted, fontSize = 11.sp)
+                    }
+                    OutlinedButton(onClick = { vm.revokeLinkedDevice(device.id) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Log out", fontSize = 12.sp) }
+                }
+            }
+            if (devices.isEmpty()) item { Text("No browsers are linked yet.", color = Muted, modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp)) }
         }
     }
 }
@@ -827,7 +860,16 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Text("Both people must accept before chatting.", color = Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(7.dp))
-                ClayField(query, { query = it.lowercase(); vm.searchUsers(it) }, "Search username", leading = Icons.Rounded.Search)
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it.lowercase(); vm.searchUsers(it) },
+                    placeholder = { Text("Search username") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, null, tint = Violet) },
+                    trailingIcon = if (query.isNotEmpty()) {{ IconButton(onClick = { query = ""; vm.searchUsers("") }) { Icon(Icons.Rounded.Close, "Clear search") } }} else null,
+                    singleLine = true,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
         items(requests.filter { it.direction == "incoming" }, key = { "request-${it.id}" }) { request ->
@@ -854,9 +896,9 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
         items(users, key = { it.id }) { user ->
             val existing = conversations.find { it.username.equals(user.username, ignoreCase = true) }
             val request = requests.find { it.user.id == user.id }
-            Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 76.dp).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Avatar(user.displayName, 48.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Medium, fontSize = 16.sp); Spacer(Modifier.height(4.dp)); Text("@${user.username}", color = Muted, fontSize = 14.sp) }
+                    Column(Modifier.weight(1f).padding(vertical = 3.dp)) { Text(user.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis); Spacer(Modifier.height(2.dp)); Text("@${user.username}", color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     Button(enabled = existing != null || request?.direction != "outgoing", onClick = {
                         when { existing != null -> onUser(user); request?.direction == "incoming" -> vm.respondConnectionRequest(request.id, true); request == null -> vm.sendConnectionRequest(user) }
                     }, shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
@@ -886,9 +928,9 @@ private fun GroupsScreen(vm: MowellViewModel, modifier: Modifier, createGroup: (
             )
         }
         items(groups, key = { "group-${it.id}" }) { group ->
-            Row(Modifier.fillMaxWidth().height(72.dp).clickable { open(group.id) }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 76.dp).clickable { open(group.id) }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Avatar(group.displayTitle(), 48.dp, Violet, group.avatarUrl); Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) { Text(group.displayTitle(), fontWeight = FontWeight.Medium, fontSize = 16.sp); Spacer(Modifier.height(4.dp)); Text(group.members.ifBlank { "Mowell group" }, color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                Column(Modifier.weight(1f).padding(vertical = 3.dp)) { Text(group.displayTitle(), fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis); Spacer(Modifier.height(2.dp)); Text(group.members.ifBlank { "Mowell group" }, color = Muted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
             }
         }
         if (groups.isEmpty()) item { EmptyState(Icons.Rounded.Groups, "No Groups Yet", "Create a group and invite people to start a shared conversation.") }
@@ -909,12 +951,12 @@ private fun CallHistoryCard(vm: MowellViewModel, conversation: ConversationEntit
     val messages by vm.messages(conversation.id).collectAsStateWithLifecycle(initialValue = emptyList())
     val lastEnded = messages.lastOrNull { it.kind == "call_end" }
     val history = lastEnded?.let { callEndText(it.body) } ?: if (conversation.isGroup) "Group call" else "Direct call"
-    Row(Modifier.fillMaxWidth().height(72.dp).clickable(onClick = onInfo).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 76.dp).clickable(onClick = onInfo).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Avatar(conversation.displayTitle(), 48.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl); Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(conversation.displayTitle(), fontWeight = FontWeight.Medium, fontSize = 16.sp)
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("↗", color = Color(0xFF09C26F), fontSize = 14.sp); Spacer(Modifier.width(4.dp)); Text(history, color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Column(Modifier.weight(1f).padding(vertical = 3.dp)) {
+                Text(conversation.displayTitle(), fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("↗", color = Color(0xFF09C26F), fontSize = 13.sp); Spacer(Modifier.width(4.dp)); Text(history, color = Muted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
             }
             IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.displayTitle(), if (conversation.isGroup) true else false)) }) { Icon(if (conversation.isGroup) Icons.Rounded.Videocam else Icons.Rounded.Call, if (conversation.isGroup) "Video" else "Voice", tint = Ink, modifier = Modifier.size(24.dp)) }
     }
@@ -1273,7 +1315,7 @@ private fun GroupRosterScreen(
                 if (banned.isEmpty()) item { EmptyState(Icons.Rounded.Block, "No Banned Members", "People removed from this group can be managed here.") }
             } else {
                 items(members, key = { "member-${it.user.id}" }) { member ->
-                    Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Avatar(member.user.displayName, 44.dp, if (member.isAdmin) Violet else Ink, member.user.avatarUrl); Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) { Text(member.user.displayName, fontWeight = FontWeight.Medium, fontSize = 16.sp); Text(when { member.isCreator -> "Creator · Super admin"; member.isAdmin -> "Admin"; else -> "Member" }, color = Muted, fontSize = 12.sp) }
                         val viewerIsCreator = creatorId == viewerId
@@ -1586,10 +1628,19 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                             colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
                             keyboardOptions = KeyboardOptions(imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default), keyboardActions = KeyboardActions(onSend = { if (enterToSend) send() })
                         )
-                        Spacer(Modifier.width(4.dp))
-                        IconButton(onClick = { if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId) }, modifier = Modifier.size(40.dp).clip(CircleShape).background(if (voiceRecording) Color(0xFFF44649) else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else "Record voice message", tint = if (voiceRecording) Color.White else Ink, modifier = Modifier.size(20.dp)) }
-                        Spacer(Modifier.width(4.dp))
-                        IconButton(enabled = text.isNotBlank(), onClick = { send() }, modifier = Modifier.size(40.dp).clip(CircleShape).background(if (text.isNotBlank()) Violet else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Send, "Send", tint = if (text.isNotBlank()) Color.White else Muted, modifier = Modifier.size(19.dp)) }
+                        Spacer(Modifier.width(6.dp))
+                        if (text.isNotBlank() && !voiceRecording) {
+                            IconButton(onClick = { send() }, modifier = Modifier.size(44.dp).clip(CircleShape).background(Violet)) {
+                                Icon(Icons.Rounded.Send, "Send", tint = Color.White, modifier = Modifier.size(20.dp))
+                            }
+                        } else {
+                            IconButton(
+                                onClick = { if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId) },
+                                modifier = Modifier.size(44.dp).clip(CircleShape).background(if (voiceRecording) Color(0xFFF44649) else Violet)
+                            ) {
+                                Icon(Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else "Record voice message", tint = Color.White, modifier = Modifier.size(21.dp))
+                            }
+                        }
                 }
             }
         },

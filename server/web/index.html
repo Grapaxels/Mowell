@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#6852d6">
+  <title>Mowell Web</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/mowell_logo.png">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <section id="pairing" class="pairing">
+    <div class="pair-card">
+      <img class="brand-logo" src="/mowell_logo.png" alt="Mowell">
+      <h1>Mowell Web</h1>
+      <p class="muted">Use Mowell on your computer without entering your password.</p>
+      <div id="qr-wrap" class="qr-wrap"><div class="spinner"></div></div>
+      <ol>
+        <li>Open Mowell on your phone.</li>
+        <li>Open <b>Linked devices</b> and tap <b>Link a device</b>.</li>
+        <li>Scan this QR code.</li>
+      </ol>
+      <p class="pair-code-label">Pairing code</p>
+      <div id="pair-code" class="pair-code">•••• ••••••</div>
+      <button id="new-code" class="secondary">Get a new code</button>
+      <p id="pair-status" class="status">Creating a secure code…</p>
+    </div>
+  </section>
+
+  <main id="workspace" class="workspace hidden">
+    <aside class="rail">
+      <div class="rail-brand"><img src="/mowell_logo.png" alt=""><span>Mowell</span></div>
+      <button class="nav active" data-view="chats" aria-label="Chats">▣<span>Chats</span></button>
+      <button class="nav" data-view="calls" aria-label="Calls">☎<span>Calls</span></button>
+      <button class="nav" data-view="people" aria-label="People">●<span>People</span></button>
+      <button class="nav" data-view="groups" aria-label="Groups">♣<span>Groups</span></button>
+      <div class="rail-spacer"></div>
+      <button id="theme-toggle" class="nav" aria-label="Toggle theme">☾<span>Theme</span></button>
+      <button id="device-button" class="nav" aria-label="Linked devices">⚙<span>Devices</span></button>
+    </aside>
+
+    <section class="list-pane">
+      <header class="list-header">
+        <div><h2 id="view-title">Chats</h2><p id="view-subtitle">Synced securely</p></div>
+        <button id="new-group" class="icon-button" title="Create group">＋</button>
+      </header>
+      <label class="search"><span>⌕</span><input id="search" autocomplete="off" placeholder="Search"></label>
+      <div id="list" class="list"></div>
+    </section>
+
+    <section id="empty-chat" class="empty-chat">
+      <img src="/mowell_logo.png" alt="">
+      <h2>Mowell Web</h2>
+      <p>Select a conversation to start messaging.</p>
+    </section>
+
+    <section id="chat" class="chat hidden">
+      <header class="chat-header">
+        <button id="mobile-back" class="icon-button mobile-only">‹</button>
+        <div id="chat-avatar" class="avatar">M</div>
+        <div class="chat-title"><h3 id="chat-name">Mowell</h3><p id="chat-presence">Online</p></div>
+        <button id="voice-call" class="icon-button" title="Voice call">☎</button>
+        <button id="video-call" class="icon-button" title="Video call">▰</button>
+        <button id="chat-more" class="icon-button" title="More">⋮</button>
+      </header>
+      <div id="messages" class="messages"></div>
+      <div id="typing" class="typing hidden">typing…</div>
+      <footer class="composer">
+        <button id="attach" class="icon-button" title="Attach">＋</button>
+        <input id="file-input" type="file" hidden>
+        <div id="reply-preview" class="reply-preview hidden"></div>
+        <textarea id="message-input" rows="1" placeholder="Message"></textarea>
+        <button id="location" class="icon-button" title="Location">⌖</button>
+        <button id="record" class="round-action" title="Voice message">●</button>
+        <button id="send" class="round-action hidden" title="Send">➤</button>
+      </footer>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="incoming" class="overlay hidden">
+    <div class="incoming-card"><div id="incoming-avatar" class="avatar large">M</div><p id="incoming-kind">Incoming call</p><h2 id="incoming-name">Mowell user</h2><div class="incoming-actions"><button id="decline-call" class="call-red">Decline</button><button id="accept-call" class="call-green">Accept</button></div></div>
+  </div>
+  <div id="call" class="call-screen hidden">
+    <div id="remote-videos" class="remote-videos"></div>
+    <video id="local-video" autoplay muted playsinline></video>
+    <div id="call-status" class="call-status">Connecting…</div>
+    <div class="call-controls"><button id="call-mute">Mic</button><button id="call-camera">Camera</button><button id="call-flip">Flip</button><button id="call-hang" class="call-red">End</button></div>
+  </div>
+  <dialog id="device-dialog"><form method="dialog"><button class="dialog-close">×</button><h2>Linked devices</h2><div id="devices"></div><button id="web-logout" class="danger" type="button">Log out this browser</button></form></dialog>
+  <dialog id="group-dialog"><form id="group-form"><button class="dialog-close" type="button">×</button><h2>Create group</h2><input id="group-name" required maxlength="80" placeholder="Group name"><div id="group-members" class="member-picker"></div><button class="primary" type="submit">Create group</button></form></dialog>
+</body>
+</html>

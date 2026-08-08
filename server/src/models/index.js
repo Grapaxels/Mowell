@@ -94,6 +94,34 @@ typingStateSchema.index({ conversation: 1, user: 1 }, { unique: true });
 
 export const TypingState = mongoose.model("TypingState", typingStateSchema);
 
+const linkedDeviceSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  deviceId: { type: String, required: true, unique: true, index: true, maxlength: 80 },
+  name: { type: String, required: true, trim: true, maxlength: 80 },
+  platform: { type: String, default: "Web", maxlength: 40 },
+  userAgent: { type: String, maxlength: 300 },
+  lastSeenAt: { type: Date, default: Date.now },
+  revokedAt: Date
+}, { timestamps: true });
+linkedDeviceSchema.index({ user: 1, revokedAt: 1, lastSeenAt: -1 });
+
+export const LinkedDevice = mongoose.model("LinkedDevice", linkedDeviceSchema);
+
+const linkSessionSchema = new mongoose.Schema({
+  sessionId: { type: String, required: true, unique: true, index: true, maxlength: 80 },
+  pairingCode: { type: String, required: true, unique: true, index: true, maxlength: 12 },
+  secretHash: { type: String, required: true, select: false },
+  requestedName: { type: String, default: "Mowell Web", maxlength: 80 },
+  userAgent: { type: String, maxlength: 300 },
+  status: { type: String, enum: ["pending", "approved"], default: "pending", index: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  linkedDevice: { type: mongoose.Schema.Types.ObjectId, ref: "LinkedDevice" },
+  webToken: { type: String, select: false },
+  expiresAt: { type: Date, required: true, expires: 0 }
+}, { timestamps: true });
+
+export const LinkSession = mongoose.model("LinkSession", linkSessionSchema);
+
 const mediaSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   uploader: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

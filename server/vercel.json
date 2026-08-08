@@ -4,7 +4,7 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 30,
-      "includeFiles": "assets/Mowell.apk"
+      "includeFiles": "{assets/Mowell.apk,web/**}"
     }
   },
   "rewrites": [

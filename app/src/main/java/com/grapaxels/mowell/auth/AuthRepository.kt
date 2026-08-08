@@ -28,6 +28,13 @@ data class GroupMemberState(
     val viewerIsAdmin: Boolean,
     val bannedMembers: List<UserProfile> = emptyList()
 )
+data class LinkedDevice(
+    val id: String,
+    val name: String,
+    val platform: String,
+    val lastSeenAt: Long,
+    val createdAt: Long
+)
 data class AuthResult(val session: AuthSession? = null, val error: String? = null, val verificationEmail: String? = null)
 data class RemoteConversation(
     val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
@@ -383,6 +390,51 @@ class AuthRepository(context: Context) {
             if (!response.isSuccessful) error(json.optString("error", "Could not start call"))
         }
     }
+
+    suspend fun approveLinkedDevice(payload: String): Result<LinkedDevice> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val body = JSONObject().put("payload", payload)
+            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices/approve")
+                .header("Authorization", "Bearer ${session.token}")
+                .post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not link this browser"))
+                parseLinkedDevice(json.getJSONObject("device"))
+            }
+        }
+    }
+
+    suspend fun fetchLinkedDevices(): Result<List<LinkedDevice>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices")
+                .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not load linked devices"))
+                val array = json.optJSONArray("devices") ?: return@use emptyList()
+                buildList { for (index in 0 until array.length()) add(parseLinkedDevice(array.getJSONObject(index))) }
+            }
+        }
+    }
+
+    suspend fun revokeLinkedDevice(deviceId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices/$deviceId")
+                .header("Authorization", "Bearer ${session.token}").delete().build()).execute().use { response ->
+                if (!response.isSuccessful) error("Could not log out this device")
+            }
+        }
+    }
+
+    private fun parseLinkedDevice(json: JSONObject) = LinkedDevice(
+        id = json.optString("id"),
+        name = json.optString("name", "Mowell Web"),
+        platform = json.optString("platform", "Web"),
+        lastSeenAt = parseDate(json.optString("lastSeenAt")),
+        createdAt = parseDate(json.optString("createdAt"))
+    )
 
     suspend fun fetchConversations(): Result<List<RemoteConversation>> = withContext(Dispatchers.IO) {
         runCatching {

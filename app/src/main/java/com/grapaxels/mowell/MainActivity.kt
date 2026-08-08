@@ -34,6 +34,7 @@ import com.grapaxels.mowell.auth.AuthSession
 import com.grapaxels.mowell.auth.ConnectionRequest
 import com.grapaxels.mowell.auth.GroupInvitation
 import com.grapaxels.mowell.auth.GroupMemberState
+import com.grapaxels.mowell.auth.LinkedDevice
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.call.CallCoordinator
 import com.grapaxels.mowell.data.CachedUser
@@ -178,6 +179,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val voiceRecording: StateFlow<Boolean> = _voiceRecording.asStateFlow()
     private val _actionBusy = MutableStateFlow(false)
     val actionBusy: StateFlow<Boolean> = _actionBusy.asStateFlow()
+    private val _linkedDevices = MutableStateFlow<List<LinkedDevice>>(emptyList())
+    val linkedDevices: StateFlow<List<LinkedDevice>> = _linkedDevices.asStateFlow()
+    private val _linkedDeviceStatus = MutableStateFlow<String?>(null)
+    val linkedDeviceStatus: StateFlow<String?> = _linkedDeviceStatus.asStateFlow()
     private val typingJobs = ConcurrentHashMap<String, Job>()
     private val syncCursors = ConcurrentHashMap<String, Long>()
     private val syncing = ConcurrentHashMap.newKeySet<String>()
@@ -820,6 +825,33 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun refreshLinkedDevices() {
+        viewModelScope.launch {
+            auth.fetchLinkedDevices().onSuccess { _linkedDevices.value = it }
+                .onFailure { _authError.value = it.message ?: "Could not load linked devices" }
+        }
+    }
+
+    fun linkWebDevice(payload: String) {
+        runAction {
+            auth.approveLinkedDevice(payload).onSuccess { device ->
+                _linkedDeviceStatus.value = "${device.name} is now linked"
+                auth.fetchLinkedDevices().onSuccess { _linkedDevices.value = it }
+            }.onFailure { _authError.value = it.message ?: "Could not link this browser" }
+        }
+    }
+
+    fun revokeLinkedDevice(deviceId: String) {
+        runAction {
+            auth.revokeLinkedDevice(deviceId).onSuccess {
+                _linkedDevices.value = _linkedDevices.value.filterNot { it.id == deviceId }
+                _linkedDeviceStatus.value = "Device logged out"
+            }.onFailure { _authError.value = it.message ?: "Could not log out this device" }
+        }
+    }
+
+    fun clearLinkedDeviceStatus() { _linkedDeviceStatus.value = null }
+
     private fun runAction(block: suspend () -> Unit) {
         if (_actionBusy.value) return
         viewModelScope.launch {
@@ -837,6 +869,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         _groupInvitations.value = emptyList()
         _groupMemberStates.value = emptyMap()
         _typingUsers.value = emptyMap()
+        _linkedDevices.value = emptyList()
+        _linkedDeviceStatus.value = null
         syncCursors.clear()
         notifier.clearAll()
         MessageSyncService.stop(getApplication())

@@ -157,7 +157,9 @@ class MowellCallActivity : ComponentActivity() {
         // avoiding a floating window full of call controls or an avatar placeholder.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !callPageLoaded || !videoActive || isFinishing || isInPictureInPictureMode) return false
         return runCatching {
-            enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
+            val builder = PictureInPictureParams.Builder().setAspectRatio(Rational(9, 16))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setSeamlessResizeEnabled(true)
+            enterPictureInPictureMode(builder.build())
         }.getOrDefault(false)
     }
 

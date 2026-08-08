@@ -19,6 +19,8 @@ The Android client defaults to `https://mowell-api.grapaxels.in` for its central
 - Voice/video/group-call experience and adaptive media policy UI.
 - In-app version check, APK download and installer handoff.
 - Android 7.0 / API 24 minimum.
+- Mowell Web client with QR/pairing-code device linking, synchronized conversations,
+  attachments, groups, contacts and browser WebRTC calling.
 
 ## Deploy the central service to Vercel
 
@@ -30,12 +32,22 @@ The Android client defaults to `https://mowell-api.grapaxels.in` for its central
 6. Deploy. `server/vercel.json` routes API traffic to the Express Vercel Function.
 7. Enter the resulting HTTPS deployment URL in Mowell's **Server setup**.
 
+Attach both `mowell-api.grapaxels.in` and `mowellweb.grapaxels.in` to this same
+Vercel project. The API hostname continues to serve Android traffic and the web
+hostname opens the browser client. At Hostinger, create the DNS record Vercel
+shows for `mowellweb` (normally a CNAME to `cname.vercel-dns.com`).
+
 For local backend development, copy `server/.env.example` to the ignored `server/.env`, then run `npm install` and `npm start` inside `server/`.
 
 The v0.1 APK must be manually upgraded to v0.2 once because v0.1 did not contain the updater. Later releases can be offered through the in-app update popup. Android always requires the user to confirm installation; silent self-updates are prohibited.
 
 ## Media and Bluetooth limits
 
-Production calls require a WebRTC media implementation, signaling integration, STUN/TURN servers and end-to-end call encryption. Adaptive bitrate, congestion control and jitter buffering minimize stalls; media cannot be pre-downloaded during an interactive call. Bluetooth does not have enough throughput for HD/4K video, so nearby video is intentionally unavailable. The current call screens and policies are a prototype, not a live media implementation.
+Internet calls use browser/Android WebRTC media with Mowell's MongoDB-backed
+signaling. The direct peer-to-peer path uses public STUN but no TURN relay, so a
+small set of restrictive carrier, corporate or symmetric-NAT networks can still
+block media. Adaptive bitrate, congestion control and jitter buffering minimize
+stalls; interactive media cannot be pre-downloaded. Bluetooth does not have
+enough throughput for HD/4K video, so nearby video calling is unavailable.
 
 The nearby packet layer is designed for direct, resilient messaging. Background BLE discovery, cryptographic peer identity, multi-radio mesh operation, attachments and audited end-to-end encryption require further production engineering.
