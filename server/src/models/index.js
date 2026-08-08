@@ -107,6 +107,10 @@ export const Media = mongoose.model("Media", mediaSchema);
 
 const callSignalSchema = new mongoose.Schema({
   room: { type: String, required: true, index: true, maxlength: 100 },
+  // Monotonic inside one call room. Mongo ObjectIds are only approximately
+  // ordered across separate Vercel processes and can therefore skip a signal
+  // when they are used as a polling cursor.
+  sequence: { type: Number, min: 1, index: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   // A client-generated id makes signaling retries safe. Without it, a brief
   // serverless/Mongo failure can either lose an ICE candidate or duplicate an
@@ -117,6 +121,7 @@ const callSignalSchema = new mongoose.Schema({
   payload: { type: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, default: () => new Date(Date.now() + 60 * 60 * 1000), expires: 0 }
 }, { timestamps: true });
+callSignalSchema.index({ room: 1, sequence: 1 }, { unique: true, partialFilterExpression: { sequence: { $type: "number" } } });
 callSignalSchema.index({ room: 1, _id: 1 });
 callSignalSchema.index(
   { room: 1, sender: 1, clientId: 1 },
@@ -132,6 +137,7 @@ const callRoomSchema = new mongoose.Schema({
   // Invited members stay in `participants` for authorization. This separate
   // list represents people actually connected to the live WebRTC call.
   activeParticipants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  signalSequence: { type: Number, default: 0, min: 0 },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   video: { type: Boolean, default: false },
   status: { type: String, enum: ["ringing", "active", "ended"], default: "ringing", index: true },

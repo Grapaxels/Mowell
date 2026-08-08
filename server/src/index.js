@@ -1069,10 +1069,21 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
     if (clientId && !/^[A-Za-z0-9._:-]{8,180}$/.test(clientId)) return res.status(400).json({ error: "Invalid call signal id" });
     const target = req.body.target ? String(req.body.target) : null;
     if (target && !call.participants.some((id) => id.toString() === target)) return res.sendStatus(403);
-    const value = { room, sender: req.auth.sub, target, type, payload: req.body.payload || {} };
+    let signal = clientId ? await CallSignal.findOne({ room, sender: req.auth.sub, clientId }) : null;
+    // Allocate ordering in Mongo itself. This remains monotonic even when two
+    // signaling requests land on different Vercel instances in the same ms.
+    const sequencedCall = signal ? null : await CallRoom.findOneAndUpdate(
+      { _id: call._id, status: { $ne: "ended" } },
+      { $inc: { signalSequence: 1 } },
+      { new: true }
+    ).select("signalSequence");
+    if (!signal && !sequencedCall) return res.status(410).json({ error: "Call has ended" });
+    const value = {
+      room, sender: req.auth.sub, target, type, payload: req.body.payload || {},
+      sequence: sequencedCall?.signalSequence
+    };
     if (clientId) value.clientId = clientId;
-    let signal;
-    if (clientId) {
+    if (!signal && clientId) {
       try {
         signal = await CallSignal.findOneAndUpdate(
           { room, sender: req.auth.sub, clientId },
@@ -1087,19 +1098,20 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
         signal = await CallSignal.findOne({ room, sender: req.auth.sub, clientId });
         if (!signal) throw error;
       }
-    } else signal = await CallSignal.create(value);
+    } else if (!signal) signal = await CallSignal.create(value);
     if (type === "leave") {
+      const activeBeforeLeave = (call.activeParticipants || []).length;
       call.activeParticipants = (call.activeParticipants || []).filter((id) => id.toString() !== req.auth.sub);
-      // A 3+ person call continues for the remaining 3+ connected members.
-      // As soon as only two (or fewer) active users remain, it becomes a
-      // one-to-one call and closes for everyone, as requested.
-      if (call.activeParticipants.length <= 2 || req.body.payload?.reason === "no_answer") {
+      // If the call had only two connected people, either person leaving ends
+      // it. If it had three or more, only the member who left is dismissed and
+      // the remaining participants continue, even when exactly two remain.
+      if (activeBeforeLeave <= 2 || req.body.payload?.reason === "no_answer") {
         await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
       } else {
         await call.save();
       }
     }
-    res.status(201).json({ id: signal._id.toString() });
+    res.status(201).json({ id: signal._id.toString(), sequence: signal.sequence || 0 });
   } catch { res.status(400).json({ error: "Could not send call signal" }); }
 });
 
@@ -1114,12 +1126,15 @@ app.get("/v1/calls/:room/signals", auth, async (req, res) => {
       return res.status(410).json({ error: "User didn't respond", code: "NO_ANSWER" });
     }
     const filter = { room, sender: { $ne: req.auth.sub }, $or: [{ target: null }, { target: req.auth.sub }] };
-    if (req.query.afterId) {
+    const afterSequence = Number(req.query.afterSequence || 0);
+    if (Number.isFinite(afterSequence) && afterSequence > 0) {
+      filter.sequence = { $gt: Math.floor(afterSequence) };
+    } else if (req.query.afterId) {
       if (!mongoose.isValidObjectId(req.query.afterId)) return res.status(400).json({ error: "Invalid call cursor" });
       filter._id = { $gt: new mongoose.Types.ObjectId(String(req.query.afterId)) };
     }
-    const signals = await CallSignal.find(filter).sort({ _id: 1 }).limit(100).populate("sender", "displayName username avatarUrl").lean();
-    res.json({ signals: signals.map((s) => ({ id: s._id.toString(), senderId: s.sender._id.toString(), senderName: s.sender.displayName || s.sender.username, senderAvatar: s.sender.avatarUrl || null, type: s.type, payload: s.payload })) });
+    const signals = await CallSignal.find(filter).sort({ sequence: 1, _id: 1 }).limit(250).populate("sender", "displayName username avatarUrl").lean();
+    res.json({ signals: signals.map((s) => ({ id: s._id.toString(), sequence: s.sequence || 0, senderId: s.sender._id.toString(), senderName: s.sender.displayName || s.sender.username, senderAvatar: s.sender.avatarUrl || null, type: s.type, payload: s.payload })) });
   } catch { res.status(400).json({ error: "Could not receive call signals" }); }
 });
 
