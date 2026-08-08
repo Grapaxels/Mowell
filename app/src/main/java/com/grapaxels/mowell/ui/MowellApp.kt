@@ -11,6 +11,7 @@ import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -153,6 +154,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontStyle
@@ -698,15 +704,15 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit, onLongClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(72.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick).background(Canvas).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Avatar(conversation.displayTitle(), 48.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
+    Row(Modifier.fillMaxWidth().heightIn(min = 82.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick).background(Canvas).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Avatar(conversation.displayTitle(), 52.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(conversation.displayTitle(), fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                     if (conversation.isGroup) Text("  Group", color = Muted, fontWeight = FontWeight.Normal, fontSize = 10.sp)
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(5.dp))
                 Text(conversation.subtitle, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -993,6 +999,7 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier, darkMode: Bo
     var editingName by remember { mutableStateOf(false) }
     var floating by remember { mutableStateOf(vm.floatingNotifications()) }
     var sendSound by remember { mutableStateOf(vm.sendSoundEnabled()) }
+    var enterToSend by remember { mutableStateOf(vm.enterToSendEnabled()) }
     var name by remember(session?.user?.displayName) { mutableStateOf(session?.user?.displayName.orEmpty()) }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let(vm::updateProfilePicture) }
     val messageSoundPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -1028,7 +1035,7 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier, darkMode: Bo
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(if (darkMode) "Dark mode" else "Light mode", fontWeight = FontWeight.Bold)
-                        Text("Match the CometChat light and dark UI", color = Muted, fontSize = 12.sp)
+                        Text("Choose the look that feels right for you", color = Muted, fontSize = 12.sp)
                     }
                     Switch(checked = darkMode, onCheckedChange = onThemeChanged)
                 }
@@ -1044,6 +1051,10 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier, darkMode: Bo
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) { Text("Message sent sound", fontWeight = FontWeight.Bold); Text("Play confirmation after sending", color = Muted, fontSize = 12.sp) }
                     Switch(checked = sendSound, onCheckedChange = { sendSound = it; vm.setSendSoundEnabled(it) })
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { Text("Enter is send", fontWeight = FontWeight.Bold); Text("Send a message when you press Enter", color = Muted, fontSize = 12.sp) }
+                    Switch(checked = enterToSend, onCheckedChange = { enterToSend = it; vm.setEnterToSendEnabled(it) })
                 }
                 OutlinedButton(onClick = { messageSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_NOTIFICATION, "Choose message sound")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming message sound") }
                 OutlinedButton(onClick = { callSoundPicker.launch(ringtonePicker(RingtoneManager.TYPE_RINGTONE, "Choose call ringtone")) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Choose incoming call ringtone") }
@@ -1318,6 +1329,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val enterToSend = remember { vm.enterToSendEnabled() }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { vm.uploadAttachment(conversationId, it) } }
     val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri -> uri?.let { vm.shareContact(conversationId, it) } }
     val cameraPicker = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
@@ -1539,9 +1551,9 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         Text("Messaging and calling are unavailable for this blocked contact.", Modifier.weight(1f), color = Ink, fontSize = 13.sp)
                         if (conversation.blockedByMe) OutlinedButton(onClick = { vm.setUserBlocked(conversationId, false) }) { Text("Unblock") }
                     }
-                } else Row(Modifier.fillMaxWidth().background(Canvas).padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.Bottom) {
+                } else Row(Modifier.fillMaxWidth().background(Canvas).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
                         Box {
-                            IconButton(enabled = !voiceRecording, onClick = { attachments = true }, modifier = Modifier.size(42.dp)) { Icon(Icons.Rounded.Add, "Share", tint = Muted, modifier = Modifier.size(22.dp)) }
+                            IconButton(enabled = !voiceRecording, onClick = { attachments = true }, modifier = Modifier.size(38.dp)) { Icon(Icons.Rounded.Add, "Share", tint = Muted, modifier = Modifier.size(21.dp)) }
                             DropdownMenu(expanded = attachments, onDismissRequest = { attachments = false }) {
                                 DropdownMenuItem(text = { Text("Camera") }, leadingIcon = { Icon(Icons.Rounded.PhotoCamera, null) }, onClick = {
                                     attachments = false
@@ -1561,16 +1573,18 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                             enabled = !voiceRecording,
                             onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) },
                             placeholder = { Text(if (voiceRecording) "Recording… tap mic to send" else "Message", color = Muted, fontSize = 14.sp) },
-                            modifier = Modifier.weight(1f).heightIn(min = 46.dp, max = 108.dp),
+                            modifier = Modifier.weight(1f).heightIn(min = 44.dp, max = 100.dp).onPreviewKeyEvent { event ->
+                                if (enterToSend && event.type == KeyEventType.KeyUp && event.key == Key.Enter && text.isNotBlank()) { send(); true } else false
+                            },
                             minLines = 1, maxLines = 4, shape = RoundedCornerShape(23.dp),
                             trailingIcon = { IconButton(onClick = { extrasOpen = true }) { Icon(Icons.Rounded.EmojiEmotions, "Emoji and stickers", tint = Muted, modifier = Modifier.size(21.dp)) } },
                             colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() })
+                            keyboardOptions = KeyboardOptions(imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default), keyboardActions = KeyboardActions(onSend = { if (enterToSend) send() })
                         )
-                        Spacer(Modifier.width(5.dp))
-                        IconButton(onClick = { if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId) }, modifier = Modifier.size(42.dp).clip(CircleShape).background(if (voiceRecording) Color(0xFFF44649) else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else "Record voice message", tint = if (voiceRecording) Color.White else Ink, modifier = Modifier.size(21.dp)) }
-                        Spacer(Modifier.width(5.dp))
-                        IconButton(enabled = text.isNotBlank(), onClick = { send() }, modifier = Modifier.size(42.dp).clip(CircleShape).background(if (text.isNotBlank()) Violet else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Send, "Send", tint = if (text.isNotBlank()) Color.White else Muted, modifier = Modifier.size(20.dp)) }
+                        Spacer(Modifier.width(4.dp))
+                        IconButton(onClick = { if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId) }, modifier = Modifier.size(40.dp).clip(CircleShape).background(if (voiceRecording) Color(0xFFF44649) else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else "Record voice message", tint = if (voiceRecording) Color.White else Ink, modifier = Modifier.size(20.dp)) }
+                        Spacer(Modifier.width(4.dp))
+                        IconButton(enabled = text.isNotBlank(), onClick = { send() }, modifier = Modifier.size(40.dp).clip(CircleShape).background(if (text.isNotBlank()) Violet else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Send, "Send", tint = if (text.isNotBlank()) Color.White else Muted, modifier = Modifier.size(19.dp)) }
                 }
             }
         },
@@ -1625,7 +1639,7 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
         return
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.widthIn(min = 64.dp, max = 286.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(12.dp)).background(if (message.outgoing) Violet else MaterialTheme.colorScheme.surfaceVariant).padding(8.dp)) {
+        Box(Modifier.widthIn(min = 64.dp, max = 286.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(12.dp)).background(if (message.outgoing) Violet else MaterialTheme.colorScheme.surfaceVariant).padding(8.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 if (!message.replyToId.isNullOrBlank()) {
@@ -1663,8 +1677,9 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                     "audio" -> AudioMessageContent(message, foreground)
                     "image", "video", "file" -> {
                         if (message.kind == "image") AttachmentImage(message)
+                        else if (message.kind == "video") AttachmentVideo(message)
                         else Icon(if (message.kind == "video") Icons.Rounded.Videocam else Icons.Rounded.AttachFile, null, tint = if (message.outgoing) Color.White else Violet)
-                        Text(message.attachmentName ?: message.body, color = foreground, fontWeight = FontWeight.Bold)
+                        if (message.kind == "file") Text(message.attachmentName ?: message.body, color = foreground, fontWeight = FontWeight.Bold)
                         Text(if (message.delivery == "uploading") "Uploading…" else "Tap to open", color = if (message.outgoing) Color.White.copy(alpha = .75f) else Muted, fontSize = 11.sp, modifier = Modifier.clickable(enabled = message.attachmentId != null, onClick = openAttachment))
                     }
                     "location" -> {
@@ -1749,6 +1764,36 @@ private fun AttachmentImage(message: MessageEntity) {
     Box(Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
         if (bitmap == null) CircularProgressIndicator(Modifier.size(24.dp), color = Violet, strokeWidth = 2.dp)
         else Image(bitmap!!.asImageBitmap(), message.attachmentName, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+    }
+    Spacer(Modifier.height(6.dp))
+}
+
+@Composable
+private fun AttachmentVideo(message: MessageEntity) {
+    val context = LocalContext.current
+    val file by produceState<File?>(null, message.attachmentId) {
+        val id = message.attachmentId ?: return@produceState
+        value = com.grapaxels.mowell.auth.AuthRepository(context).downloadAttachment(id).getOrNull()?.second?.let { bytes ->
+            withContext(Dispatchers.IO) {
+                File(context.cacheDir, "mowell-video").apply { mkdirs() }.let { directory ->
+                    File(directory, "${message.id}.mp4").apply { writeBytes(bytes) }
+                }
+            }
+        }
+    }
+    var playing by remember(message.id) { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(8.dp)).background(Color.Black).clickable(enabled = file != null) { playing = !playing }, contentAlignment = Alignment.Center) {
+        if (file == null) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+        else AndroidView(factory = { viewContext ->
+            VideoView(viewContext).apply {
+                setVideoURI(Uri.fromFile(file))
+                setOnCompletionListener { playing = false }
+            }
+        }, update = { view ->
+            if (playing && !view.isPlaying) view.start()
+            if (!playing && view.isPlaying) view.pause()
+        }, modifier = Modifier.fillMaxSize())
+        Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause video" else "Play video", tint = Color.White, modifier = Modifier.size(46.dp).background(Color.Black.copy(alpha = .42f), CircleShape).padding(10.dp))
     }
     Spacer(Modifier.height(6.dp))
 }

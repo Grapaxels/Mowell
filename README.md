@@ -38,4 +38,4 @@ The v0.1 APK must be manually upgraded to v0.2 once because v0.1 did not contain
 
 Production calls require a WebRTC media implementation, signaling integration, STUN/TURN servers and end-to-end call encryption. Adaptive bitrate, congestion control and jitter buffering minimize stalls; media cannot be pre-downloaded during an interactive call. Bluetooth does not have enough throughput for HD/4K video, so nearby video is intentionally unavailable. The current call screens and policies are a prototype, not a live media implementation.
 
-The nearby packet layer implements useful Bitchat-inspired behaviors but is not a complete clone of Bitchat. Background BLE discovery, cryptographic peer identity, multi-radio mesh operation, attachments and audited end-to-end encryption require further production engineering.
+The nearby packet layer is designed for direct, resilient messaging. Background BLE discovery, cryptographic peer identity, multi-radio mesh operation, attachments and audited end-to-end encryption require further production engineering.

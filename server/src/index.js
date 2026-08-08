@@ -958,6 +958,16 @@ app.post("/v1/calls/:room/ring", auth, async (req, res) => {
       room, conversation: conversation._id, participants: conversation.members,
       activeParticipants: [], createdBy: req.auth.sub, video: Boolean(req.body.video)
     });
+    // Create the invitation only after its call room exists. A recipient can
+    // now accept immediately instead of racing the caller's camera startup.
+    const body = JSON.stringify({ room, video: Boolean(req.body.video), group: conversation.members.length > 2 });
+    const invitation = await Message.findOneAndUpdate(
+      { conversation: conversation._id, clientId: `call-${room}` },
+      { $setOnInsert: { sender: req.auth.sub, body, kind: "call", sentAt: new Date() } },
+      { upsert: true, new: true }
+    );
+    conversation.lastMessageAt = invitation.sentAt;
+    await conversation.save();
     res.status(201).json({ ok: true, group: conversation.members.length > 2 });
   } catch { res.status(400).json({ error: "Could not start call" }); }
 });

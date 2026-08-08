@@ -68,6 +68,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 
 data class CallSession(
     val conversationId: String,
@@ -84,6 +85,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
         setContent {
             val vm = mowellViewModel
             val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -370,9 +372,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createCall(conversationId: String, name: String, video: Boolean): CallSession {
-        val room = "Mowell-${UUID.randomUUID().toString().replace("-", "")}"
+        val room = "Mowell-${UUID.randomUUID().toString().replace("-", "")}" 
         val group = conversations.value.find { it.id == conversationId }?.isGroup ?: false
-        sendTyped(conversationId, JSONObject().put("room", room).put("video", video).put("group", group).toString(), "call")
         val avatar = conversations.value.find { it.id == conversationId }?.avatarUrl
         return CallSession(conversationId, name, room, video, group, initiator = true, avatarUrl = avatar)
     }
@@ -584,6 +585,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     fun setFloatingNotifications(enabled: Boolean) = NotificationPreferences.setFloating(getApplication(), enabled)
     fun sendSoundEnabled() = NotificationPreferences.sendSound(getApplication())
     fun setSendSoundEnabled(enabled: Boolean) = NotificationPreferences.setSendSound(getApplication(), enabled)
+    fun enterToSendEnabled() = NotificationPreferences.enterToSend(getApplication())
+    fun setEnterToSendEnabled(enabled: Boolean) = NotificationPreferences.setEnterToSend(getApplication(), enabled)
     fun setMessageSound(uri: Uri) = NotificationPreferences.setMessageSound(getApplication(), uri.toString())
     fun setCallSound(uri: Uri) = NotificationPreferences.setCallSound(getApplication(), uri.toString())
     fun setConversationSound(conversationId: String, uri: Uri) = NotificationPreferences.setConversationSound(getApplication(), conversationId, uri.toString())
