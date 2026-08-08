@@ -59,7 +59,7 @@ class MessageSyncService : Service() {
                     runCatching { checkForUpdate() }
                     nextUpdateCheckAt = System.currentTimeMillis() + 30 * 60 * 1000L
                 }
-                delay(2_000)
+                delay(800)
             }
         }
     }

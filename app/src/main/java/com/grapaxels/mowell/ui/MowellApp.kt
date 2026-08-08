@@ -37,8 +37,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -1335,11 +1338,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     val cameraPicker = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
         if (captured) cameraUri?.let { vm.uploadAttachment(conversationId, it) }
     }
-    val timelineMessages = messages.filter { message ->
-        message.threadRootId.isNullOrBlank() && !(message.kind == "call" && runCatching {
-            JSONObject(message.body).optString("room") in endedRooms
-        }.getOrDefault(false))
-    }
+    val timelineMessages = messages.filter { it.threadRootId.isNullOrBlank() }
     val displayedMessages = if (chatQuery.isBlank()) timelineMessages else timelineMessages.filter { message ->
         message.body.contains(chatQuery, ignoreCase = true) ||
             message.attachmentName?.contains(chatQuery, ignoreCase = true) == true ||
@@ -1450,7 +1449,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     Scaffold(
         containerColor = Canvas,
         topBar = {
-            Column(Modifier.fillMaxWidth().background(Canvas)) {
+            Column(Modifier.fillMaxWidth().background(Canvas).statusBarsPadding()) {
                 Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
                     Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
@@ -1525,12 +1524,18 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             }
         },
         bottomBar = {
-            Column(Modifier.fillMaxWidth().background(Canvas)) {
+            Column(Modifier.fillMaxWidth().background(Canvas).navigationBarsPadding().imePadding()) {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
                 AnimatedVisibility(replyTo != null) {
-                    Row(Modifier.fillMaxWidth().background(Lavender).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) { Text("Replying to ${replyTo?.sender.orEmpty()}", color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text(replyTo?.body.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Muted, fontSize = 11.sp) }
-                        IconButton(onClick = { replyTo = null }) { Text("×", fontSize = 25.sp) }
+                    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.width(3.dp).height(38.dp).clip(RoundedCornerShape(3.dp)).background(if (replyTo?.outgoing == true) Violet else Lime))
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("↩ ${if (replyTo?.outgoing == true) "You" else replyTo?.sender.orEmpty()}", color = Violet, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            val replyPreview = when (replyTo?.kind) { "image" -> "Photo"; "video" -> "Video"; "audio" -> "Voice message"; "file" -> replyTo?.attachmentName ?: "Document"; else -> replyTo?.body.orEmpty() }
+                            Text(replyPreview, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Muted, fontSize = 12.sp)
+                        }
+                        IconButton(onClick = { replyTo = null }, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.Close, "Cancel reply", tint = Muted, modifier = Modifier.size(20.dp)) }
                     }
                 }
                 AnimatedVisibility(mentionSuggestions.isNotEmpty()) {
@@ -1625,7 +1630,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
 @Composable
 private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, onReactionInfo: () -> Unit, onPollVote: (Int) -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
-    if (message.kind in setOf("system", "call", "call_end")) {
+    if (message.kind in setOf("system", "call_end")) {
         val label = when (message.kind) {
             "call_end" -> callEndText(message.body)
             "call" -> if (runCatching { JSONObject(message.body).optBoolean("video") }.getOrDefault(false)) "Video call started" else "Voice call started"
