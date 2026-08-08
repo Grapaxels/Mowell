@@ -412,7 +412,7 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
             containerColor = Canvas,
             topBar = { ClayHeader(vm, page, darkMode, onThemeChanged) },
             bottomBar = {
-                NavigationBar(containerColor = ClayWhite, tonalElevation = 0.dp, modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline)) {
+                NavigationBar(containerColor = Canvas, tonalElevation = 0.dp, modifier = Modifier.height(68.dp)) {
                     Nav(Page.CHATS, page, "Chats", Icons.Rounded.ChatBubble) { page = it }
                     Nav(Page.PEOPLE, page, "People", Icons.Rounded.Search) { page = it }
                     Nav(Page.CALLS, page, "Calls", Icons.Rounded.Call) { page = it }
@@ -443,25 +443,26 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
 
 @Composable
 private fun ClayHeader(vm: MowellViewModel, page: Page, darkMode: Boolean, onThemeChanged: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().background(Canvas).border(1.dp, MaterialTheme.colorScheme.outline).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        OrbLogo(34.dp); Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(when (page) { Page.CHATS -> "Chats"; Page.PEOPLE -> "People"; Page.CALLS -> "Calls"; Page.NEARBY -> "Nearby"; Page.YOU -> "You" }, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(if (vm.networkLabel().startsWith("Internet")) Color(0xFF20B26B) else Color(0xFFFFA928)))
-                Spacer(Modifier.width(5.dp))
-                Text(if (vm.networkLabel().startsWith("Internet")) "Online" else "Nearby mode", color = Muted, fontSize = 11.sp)
+    val session by vm.session.collectAsStateWithLifecycle()
+    Column(Modifier.fillMaxWidth().background(Canvas)) {
+        Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                when (page) { Page.CHATS -> "Chats"; Page.PEOPLE -> "People"; Page.CALLS -> "Calls"; Page.NEARBY -> "Nearby"; Page.YOU -> "You" },
+                modifier = Modifier.weight(1f), fontSize = 24.sp, fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = { onThemeChanged(!darkMode) }) {
+                Icon(if (darkMode) Icons.Rounded.LightMode else Icons.Rounded.DarkMode, if (darkMode) "Use light theme" else "Use dark theme", tint = Ink)
             }
+            Spacer(Modifier.width(2.dp))
+            Avatar(session?.user?.displayName ?: "M", 40.dp, Violet, session?.user?.avatarUrl)
         }
-        IconButton(onClick = { onThemeChanged(!darkMode) }) {
-            Icon(if (darkMode) Icons.Rounded.LightMode else Icons.Rounded.DarkMode, if (darkMode) "Use light theme" else "Use dark theme", tint = Violet)
-        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
     }
 }
 
 @Composable
 private fun RowScope.Nav(target: Page, selected: Page, label: String, icon: ImageVector, onSelect: (Page) -> Unit) {
-    NavigationBarItem(selected = target == selected, onClick = { onSelect(target) }, icon = { Icon(icon, label, Modifier.size(22.dp)) }, label = { Text(label, fontSize = 10.sp, fontWeight = if (target == selected) FontWeight.Bold else FontWeight.Normal) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = VioletDark, selectedTextColor = VioletDark, unselectedIconColor = Muted, unselectedTextColor = Muted, indicatorColor = Lavender))
+    NavigationBarItem(selected = target == selected, onClick = { onSelect(target) }, icon = { Icon(icon, label, Modifier.size(22.dp)) }, label = { Text(label, fontSize = 10.sp, fontWeight = if (target == selected) FontWeight.SemiBold else FontWeight.Normal) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Violet, selectedTextColor = Violet, unselectedIconColor = Muted, unselectedTextColor = Muted, indicatorColor = Color.Transparent))
 }
 
 @Composable
@@ -544,12 +545,14 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
         )
     }
 
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
         item {
-            ClayField(peopleQuery, { value -> peopleQuery = value.lowercase(); vm.searchUsers(value) }, "Search people by username", leading = Icons.Rounded.Search)
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                ClayField(peopleQuery, { value -> peopleQuery = value.lowercase(); vm.searchUsers(value) }, "Search people by username", leading = Icons.Rounded.Search)
+            }
         }
         item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 6.dp)) {
+            LazyRow(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = 16.dp)) {
                 item { FilterChip(selected = selectedFilter == "all", onClick = { selectedFilter = "all" }, label = { Text("All") }) }
                 item { FilterChip(selected = selectedFilter == "unread", onClick = { selectedFilter = "unread" }, label = { Text("Unread") }) }
                 item { FilterChip(selected = selectedFilter == "groups", onClick = { selectedFilter = "groups" }, label = { Text("Groups") }) }
@@ -570,7 +573,7 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
             items(users, key = { "person-${it.id}" }) { user ->
                 val existing = conversations.find { it.username.equals(user.username, ignoreCase = true) }
                 val request = requests.find { it.user.id == user.id }
-                ClayCard(ClayWhite) {
+                ClayCard(Canvas, Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
@@ -582,12 +585,12 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
                     }
                 }
             }
-            if (users.isEmpty()) item { Text("No matching people found.", color = Muted, modifier = Modifier.padding(10.dp)) }
+            if (users.isEmpty()) item { EmptyState(Icons.Rounded.Search, "No people found", "Try another username.") }
         } else {
             items(visibleConversations, key = { it.id }) { conversation ->
                 ConversationClay(conversation, onClick = { open(conversation.id) }, onLongClick = { hideTarget = conversation })
             }
-            if (visibleConversations.isEmpty()) item { Text("No chats in this list yet.", color = Muted, modifier = Modifier.padding(10.dp)) }
+            if (visibleConversations.isEmpty()) item { EmptyState(Icons.Rounded.ChatBubble, "No Conversations Yet", "Start a new chat or invite others to join the conversation.") }
         }
     }
 }
@@ -595,14 +598,14 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit, onLongClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).clip(RoundedCornerShape(14.dp)).background(if (conversation.isGroup) Lavender else ClayWhite).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).background(Canvas)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
             Avatar(conversation.displayTitle(), 48.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(conversation.displayTitle(), fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                    if (conversation.isGroup) Text("  Group", color = Violet, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
+                    if (conversation.isGroup) Text("  Group", color = Muted, fontWeight = FontWeight.Normal, fontSize = 10.sp)
                 }
                 Spacer(Modifier.height(2.dp))
                 Text(conversation.subtitle, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
@@ -612,6 +615,7 @@ private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Un
                 if (conversation.unreadCount > 0) Box(Modifier.padding(top = 5.dp).clip(CircleShape).background(Violet).padding(horizontal = 7.dp, vertical = 2.dp)) { Text(conversation.unreadCount.coerceAtMost(99).toString(), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
             }
         }
+        Box(Modifier.fillMaxWidth().padding(start = 76.dp).height(1.dp).background(MaterialTheme.colorScheme.outline))
     }
 }
 
@@ -705,14 +709,16 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
     val groupInvitations by vm.groupInvitations.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { while (true) { vm.refreshSocial(); delay(4_000) } }
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
-            Text("Both people must accept before chatting.", color = Muted, fontSize = 12.sp)
-            Spacer(Modifier.height(7.dp))
-            ClayField(query, { query = it.lowercase(); vm.searchUsers(it) }, "Search username", leading = Icons.Rounded.Search)
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text("Both people must accept before chatting.", color = Muted, fontSize = 12.sp)
+                Spacer(Modifier.height(7.dp))
+                ClayField(query, { query = it.lowercase(); vm.searchUsers(it) }, "Search username", leading = Icons.Rounded.Search)
+            }
         }
         items(requests.filter { it.direction == "incoming" }, key = { "request-${it.id}" }) { request ->
-            ClayCard(Lavender) {
+            ClayCard(Lavender, Modifier.padding(horizontal = 16.dp, vertical = 3.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar(request.user.displayName, 42.dp, Violet, request.user.avatarUrl); Spacer(Modifier.width(9.dp))
                     Column(Modifier.weight(1f)) { Text(request.user.displayName, fontWeight = FontWeight.Bold); Text("wants to connect · @${request.user.username}", color = Muted, fontSize = 11.sp) }
@@ -722,7 +728,7 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
             }
         }
         items(groupInvitations, key = { "group-invitation-${it.id}" }) { invitation ->
-            ClayCard(Peach) {
+            ClayCard(Peach, Modifier.padding(horizontal = 16.dp, vertical = 3.dp)) {
                 Text("Group invitation", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text(invitation.groupTitle, fontWeight = FontWeight.Black)
                 Text("Invited by ${invitation.inviter.displayName}", color = Muted, fontSize = 11.sp)
@@ -735,7 +741,7 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
         items(users, key = { it.id }) { user ->
             val existing = conversations.find { it.username.equals(user.username, ignoreCase = true) }
             val request = requests.find { it.user.id == user.id }
-            ClayCard(ClayWhite) {
+            ClayCard(Canvas, Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar(user.displayName, 50.dp, Violet, user.avatarUrl); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) { Text(user.displayName, fontWeight = FontWeight.Bold); Text("@${user.username}", color = Violet, fontSize = 13.sp) }
@@ -747,16 +753,17 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
                 }
             }
         }
-        if (query.length >= 2 && users.isEmpty()) item { Text("No matching cached or online users yet.", color = Muted, modifier = Modifier.padding(10.dp)) }
+        if (query.length >= 2 && users.isEmpty()) item { EmptyState(Icons.Rounded.Search, "No people found", "Check the username and try again.") }
     }
 }
 
 @Composable
 private fun CallsScreen(vm: MowellViewModel, modifier: Modifier, onCall: (CallSession) -> Unit) {
     val conversations by vm.conversations.collectAsStateWithLifecycle()
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("Recent voice and video calls", color = Muted, fontSize = 13.sp) }
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        item { Text("Recent", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
         items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation -> CallHistoryCard(vm, conversation, onCall) }
+        if (conversations.none { it.id != "general" }) item { EmptyState(Icons.Rounded.Call, "No Calls Yet", "Your voice and video call history will appear here.") }
     }
 }
 
@@ -765,7 +772,7 @@ private fun CallHistoryCard(vm: MowellViewModel, conversation: ConversationEntit
     val messages by vm.messages(conversation.id).collectAsStateWithLifecycle(initialValue = emptyList())
     val lastEnded = messages.lastOrNull { it.kind == "call_end" }
     val history = lastEnded?.let { callEndText(it.body) } ?: if (conversation.isGroup) "Group call" else "Direct call"
-    ClayCard(if (conversation.isGroup) Lavender else ClayWhite) {
+    ClayCard(Canvas, Modifier.padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(conversation.displayTitle(), 52.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl); Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -796,13 +803,13 @@ private fun NearbyScreen(vm: MowellViewModel, modifier: Modifier) {
     var refresh by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { vm.bluetooth.startListening() }
     val peers = remember(refresh) { vm.bluetooth.bondedPeers() }
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Text("Store locally, send to a paired peer, and keep working without internet.", color = Muted)
         }
         items(peers) { (name, address) ->
             val chosen = vm.selectedPeer == address
-            ClayCard(if (chosen) Lime else ClayWhite, Modifier.clickable { vm.selectedPeer = address; refresh++ }) {
+            ClayCard(if (chosen) Lavender else Canvas, Modifier.clickable { vm.selectedPeer = address; refresh++ }) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Rounded.Bluetooth, null, tint = Violet); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(name.ifBlank { "Nearby device" }, fontWeight = FontWeight.Bold); Text(address, color = Muted, fontSize = 11.sp) }; if (chosen) Text("ACTIVE", fontSize = 10.sp, fontWeight = FontWeight.Black) }
             }
         }
@@ -1115,8 +1122,8 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     Scaffold(
         containerColor = Canvas,
         topBar = {
-            Column(Modifier.fillMaxWidth().background(Canvas).border(1.dp, MaterialTheme.colorScheme.outline)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.fillMaxWidth().background(Canvas)) {
+                Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
                     Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
                         Avatar(conversation?.displayTitle() ?: "M", 42.dp, Violet, conversation?.avatarUrl); Spacer(Modifier.width(9.dp))
@@ -1166,10 +1173,12 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)
                     )
                 }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
             }
         },
         bottomBar = {
-            Column(Modifier.fillMaxWidth().background(Canvas).border(1.dp, MaterialTheme.colorScheme.outline)) {
+            Column(Modifier.fillMaxWidth().background(Canvas)) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
                 AnimatedVisibility(replyTo != null) {
                     Row(Modifier.fillMaxWidth().background(Lavender).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) { Text("Replying to ${replyTo?.sender.orEmpty()}", color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text(replyTo?.body.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Muted, fontSize = 11.sp) }
@@ -1225,7 +1234,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             }
         }
     ) { padding ->
-        LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState, contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        LazyColumn(Modifier.padding(padding).fillMaxSize().background(MaterialTheme.colorScheme.surface), state = listState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             if (chatQuery.isNotBlank() && displayedMessages.isEmpty()) item(key = "no-search-results") { Text("No matching messages or files", color = Muted, modifier = Modifier.fillMaxWidth().padding(24.dp)) }
             items(displayedMessages, key = { it.id }) { message ->
                 val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
@@ -1241,7 +1250,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
 private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.widthIn(min = 88.dp, max = 310.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (message.outgoing) 16.dp else 4.dp, bottomEnd = if (message.outgoing) 4.dp else 16.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, if (message.outgoing) Violet else MaterialTheme.colorScheme.outline, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (message.outgoing) 16.dp else 4.dp, bottomEnd = if (message.outgoing) 4.dp else 16.dp)).padding(horizontal = 12.dp, vertical = 9.dp)) {
+        Box(Modifier.widthIn(min = 72.dp, max = 286.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = if (message.outgoing) 12.dp else 3.dp, bottomEnd = if (message.outgoing) 3.dp else 12.dp)).background(if (message.outgoing) Violet else MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 12.dp, vertical = 8.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 when (message.kind) {
@@ -1297,10 +1306,16 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                         color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted,
                         fontStyle = if (message.body == "This message was deleted") FontStyle.Italic else FontStyle.Normal
                     )
-                    else -> Text(message.body, color = foreground)
+                    else -> Text(message.body, color = foreground, fontSize = 14.sp, lineHeight = 19.sp)
                 }
                 Spacer(Modifier.height(3.dp))
-                Row(Modifier.align(Alignment.End)) { Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted, fontSize = 10.sp); Spacer(Modifier.width(5.dp)); Text(route(message.route), color = if (message.outgoing) Color.White.copy(alpha = .82f) else Violet, fontSize = 9.sp, fontWeight = FontWeight.SemiBold) }
+                Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                    Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted, fontSize = 9.sp)
+                    if (message.outgoing) {
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (message.delivery == "sending") "✓" else "✓✓", color = if (message.delivery == "sent") Color(0xFF5DE2C1) else Color.White.copy(alpha = .7f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
     }
@@ -1311,7 +1326,22 @@ private fun CallButton(icon: ImageVector, label: String, color: Color, click: ()
 
 @Composable
 private fun ClayCard(color: Color, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(color).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+}
+
+@Composable
+private fun EmptyState(icon: ImageVector, title: String, subtitle: String) {
+    Column(
+        Modifier.fillMaxWidth().heightIn(min = 360.dp).padding(horizontal = 42.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(icon, null, tint = Muted.copy(alpha = .35f), modifier = Modifier.size(72.dp))
+        Spacer(Modifier.height(18.dp))
+        Text(title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+        Spacer(Modifier.height(6.dp))
+        Text(subtitle, color = Muted, fontSize = 13.sp, lineHeight = 18.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
 }
 
 @Composable

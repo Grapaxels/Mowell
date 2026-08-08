@@ -12,8 +12,8 @@ android {
         applicationId = "com.grapaxels.mowell"
         minSdk = 24
         targetSdk = 35
-        versionCode = 24
-        versionName = "1.6.0"
+        versionCode = 26
+        versionName = "1.7.0"
         buildConfigField("boolean", "SELF_UPDATE", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -42,9 +42,9 @@ android {
         create("direct") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
-            // Sideloaded packages must not silently become app installers.
-            // Updates are handled by Google Play once the app is published.
-            buildConfigField("boolean", "SELF_UPDATE", "false")
+            // GitHub/Vercel builds download the next signed APK and then hand it
+            // to Android's normal, user-confirmed package installer.
+            buildConfigField("boolean", "SELF_UPDATE", "true")
         }
     }
     compileOptions {

@@ -206,11 +206,12 @@ class MessageSyncService : Service() {
     companion object {
         private const val SERVICE_NOTIFICATION_ID = 41001
 
-        fun start(context: Context) {
+        fun start(context: Context): Boolean = runCatching {
             val intent = Intent(context, MessageSyncService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ContextCompat.startForegroundService(context, intent)
             else context.startService(intent)
-        }
+            true
+        }.getOrDefault(false)
 
         fun stop(context: Context) {
             context.stopService(Intent(context, MessageSyncService::class.java))

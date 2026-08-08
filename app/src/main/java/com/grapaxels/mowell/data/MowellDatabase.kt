@@ -9,7 +9,7 @@ class MowellDatabase private constructor(context: Context) {
     private val mowellDao by lazy { MowellDao { helper.writableDatabase } }
     fun dao(): MowellDao = mowellDao
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 9) {
+    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 10) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""
                 CREATE TABLE conversations (
@@ -53,25 +53,58 @@ class MowellDatabase private constructor(context: Context) {
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             if (oldVersion < 2) createUsers(db)
             if (oldVersion < 3) {
-                db.execSQL("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'")
-                db.execSQL("ALTER TABLE messages ADD COLUMN attachmentId TEXT")
-                db.execSQL("ALTER TABLE messages ADD COLUMN attachmentMime TEXT")
-                db.execSQL("ALTER TABLE messages ADD COLUMN attachmentName TEXT")
+                addColumnIfMissing(db, "messages", "kind", "TEXT NOT NULL DEFAULT 'text'")
+                addColumnIfMissing(db, "messages", "attachmentId", "TEXT")
+                addColumnIfMissing(db, "messages", "attachmentMime", "TEXT")
+                addColumnIfMissing(db, "messages", "attachmentName", "TEXT")
             }
             if (oldVersion < 4) {
-                db.execSQL("ALTER TABLE conversations ADD COLUMN username TEXT")
-                db.execSQL("ALTER TABLE conversations ADD COLUMN avatarUrl TEXT")
-                db.execSQL("ALTER TABLE conversations ADD COLUMN lastSeenAt INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE conversations ADD COLUMN members TEXT NOT NULL DEFAULT ''")
+                addColumnIfMissing(db, "conversations", "username", "TEXT")
+                addColumnIfMissing(db, "conversations", "avatarUrl", "TEXT")
+                addColumnIfMissing(db, "conversations", "lastSeenAt", "INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "conversations", "members", "TEXT NOT NULL DEFAULT ''")
             }
-            if (oldVersion < 5) db.execSQL("ALTER TABLE conversations ADD COLUMN unreadCount INTEGER NOT NULL DEFAULT 0")
+            if (oldVersion < 5) addColumnIfMissing(db, "conversations", "unreadCount", "INTEGER NOT NULL DEFAULT 0")
             if (oldVersion < 6) {
-                db.execSQL("ALTER TABLE conversations ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE conversations ADD COLUMN blockedByMe INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "conversations", "blocked", "INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "conversations", "blockedByMe", "INTEGER NOT NULL DEFAULT 0")
             }
             if (oldVersion < 7) createChatLists(db)
-            if (oldVersion < 8) db.execSQL("ALTER TABLE conversations ADD COLUMN hiddenAt INTEGER NOT NULL DEFAULT 0")
-            if (oldVersion < 9) db.execSQL("ALTER TABLE conversations ADD COLUMN localTitle TEXT")
+            if (oldVersion < 8) addColumnIfMissing(db, "conversations", "hiddenAt", "INTEGER NOT NULL DEFAULT 0")
+            if (oldVersion < 9) addColumnIfMissing(db, "conversations", "localTitle", "TEXT")
+
+            // Version 10 repairs databases produced by interrupted or partially
+            // installed older updates without deleting the user's local chats.
+            createUsers(db)
+            createChatLists(db)
+            addColumnIfMissing(db, "messages", "kind", "TEXT NOT NULL DEFAULT 'text'")
+            addColumnIfMissing(db, "messages", "attachmentId", "TEXT")
+            addColumnIfMissing(db, "messages", "attachmentMime", "TEXT")
+            addColumnIfMissing(db, "messages", "attachmentName", "TEXT")
+            addColumnIfMissing(db, "conversations", "username", "TEXT")
+            addColumnIfMissing(db, "conversations", "avatarUrl", "TEXT")
+            addColumnIfMissing(db, "conversations", "lastSeenAt", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "conversations", "members", "TEXT NOT NULL DEFAULT ''")
+            addColumnIfMissing(db, "conversations", "unreadCount", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "conversations", "blocked", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "conversations", "blockedByMe", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "conversations", "hiddenAt", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "conversations", "localTitle", "TEXT")
+        }
+
+        private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, definition: String) {
+            val exists = db.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                var found = false
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(nameIndex).equals(column, ignoreCase = true)) {
+                        found = true
+                        break
+                    }
+                }
+                found
+            }
+            if (!exists) db.execSQL("ALTER TABLE $table ADD COLUMN $column $definition")
         }
 
         private fun createUsers(db: SQLiteDatabase) = db.execSQL("""

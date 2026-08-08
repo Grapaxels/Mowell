@@ -117,6 +117,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Starting a foreground service from Application.onCreate can crash on
+        // Android 12+ when Package Installer starts our FileProvider in the
+        // background during an update. MainActivity is a safe foreground entry.
+        if (mowellViewModel.auth.savedSession != null) MessageSyncService.start(this)
         mowellViewModel.resumeUpdateInstall(this)
         mowellViewModel.autoCheckForUpdates()
     }
