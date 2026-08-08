@@ -743,6 +743,17 @@ app.get("/v1/conversations/:id/typing", auth, async (req, res) => {
 });
 
 const validRoom = (room) => /^[A-Za-z0-9-]{8,100}$/.test(room);
+const envUrls = (name) => String(process.env[name] || "").split(",").map((url) => url.trim()).filter(Boolean);
+const callIceServers = () => {
+  const servers = [];
+  const stunUrls = envUrls("STUN_URLS");
+  const turnUrls = envUrls("TURN_URLS");
+  if (stunUrls.length) servers.push({ urls: stunUrls });
+  if (turnUrls.length && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+    servers.push({ urls: turnUrls, username: process.env.TURN_USERNAME, credential: process.env.TURN_CREDENTIAL });
+  }
+  return servers;
+};
 const endCall = async (call, reason = "ended", senderId = null) => {
   if (call.status === "ended") return;
   const endedAt = new Date();
@@ -754,6 +765,15 @@ const endCall = async (call, reason = "ended", senderId = null) => {
     { upsert: true, new: true }
   );
 };
+
+// A TURN relay is required for reliable calls across mobile networks and
+// restrictive Wi-Fi. The relay remains owned by Grapaxels; this endpoint only
+// supplies its authenticated WebRTC configuration to signed-in call clients.
+app.get("/v1/calls/ice", auth, (req, res) => {
+  const iceServers = callIceServers();
+  if (!iceServers.length) return res.status(503).json({ error: "Call relay is not configured" });
+  res.json({ iceServers });
+});
 
 // Create/join a short-lived call room. Only identities already invited may join.
 app.post("/v1/calls/:room/join", auth, async (req, res) => {
