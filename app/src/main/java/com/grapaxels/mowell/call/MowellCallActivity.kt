@@ -65,9 +65,10 @@ class MowellCallActivity : ComponentActivity() {
         val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
         audio.isSpeakerphoneOn = intent.getBooleanExtra("video", false)
+        val darkMode = getSharedPreferences("mowell_ui", Context.MODE_PRIVATE).getBoolean("dark_mode", false)
 
         webView = WebView(this).apply {
-            setBackgroundColor(android.graphics.Color.rgb(17, 17, 24))
+            setBackgroundColor(if (darkMode) android.graphics.Color.rgb(15, 15, 16) else android.graphics.Color.WHITE)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = false
             settings.allowFileAccess = false
@@ -144,6 +145,7 @@ class MowellCallActivity : ComponentActivity() {
             .put("video", intent.getBooleanExtra("video", false))
             .put("initiator", intent.getBooleanExtra("initiator", false))
             .put("group", intent.getBooleanExtra("group", false))
+            .put("darkMode", getSharedPreferences("mowell_ui", Context.MODE_PRIVATE).getBoolean("dark_mode", false))
         val html = assets.open("mowell_call.html").bufferedReader().use { it.readText() }
             .replace("__MOWELL_CONFIG__", config.toString().replace("</", "<\\/"))
         webView.loadDataWithBaseURL("https://mowell-api.grapaxels.in/", html, "text/html", "UTF-8", null)

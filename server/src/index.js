@@ -743,17 +743,16 @@ app.get("/v1/conversations/:id/typing", auth, async (req, res) => {
 });
 
 const validRoom = (room) => /^[A-Za-z0-9-]{8,100}$/.test(room);
-const envUrls = (name) => String(process.env[name] || "").split(",").map((url) => url.trim()).filter(Boolean);
-const callIceServers = () => {
-  const servers = [];
-  const stunUrls = envUrls("STUN_URLS");
-  const turnUrls = envUrls("TURN_URLS");
-  if (stunUrls.length) servers.push({ urls: stunUrls });
-  if (turnUrls.length && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
-    servers.push({ urls: turnUrls, username: process.env.TURN_USERNAME, credential: process.env.TURN_CREDENTIAL });
-  }
-  return servers;
-};
+const callIceServers = () => [{
+  // Free STUN discovery keeps media peer-to-peer and needs no credentials or
+  // deployment variables. Networks that block direct WebRTC still cannot be
+  // traversed without a relay, so the Android client reports that case clearly.
+  urls: [
+    "stun:stun.l.google.com:19302",
+    "stun:stun1.l.google.com:19302",
+    "stun:stun.cloudflare.com:3478"
+  ]
+}];
 const endCall = async (call, reason = "ended", senderId = null) => {
   if (call.status === "ended") return;
   const endedAt = new Date();
@@ -766,13 +765,10 @@ const endCall = async (call, reason = "ended", senderId = null) => {
   );
 };
 
-// A TURN relay is required for reliable calls across mobile networks and
-// restrictive Wi-Fi. The relay remains owned by Grapaxels; this endpoint only
-// supplies its authenticated WebRTC configuration to signed-in call clients.
+// Supply credential-free peer-to-peer discovery configuration to authenticated
+// clients. No calling-service account or additional deployment variable is used.
 app.get("/v1/calls/ice", auth, (req, res) => {
-  const iceServers = callIceServers();
-  if (!iceServers.length) return res.status(503).json({ error: "Call relay is not configured" });
-  res.json({ iceServers });
+  res.json({ iceServers: callIceServers(), peerToPeerOnly: true });
 });
 
 // Create/join a short-lived call room. Only identities already invited may join.

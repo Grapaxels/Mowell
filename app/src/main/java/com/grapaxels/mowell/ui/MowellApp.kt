@@ -65,6 +65,8 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.ContactPhone
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PhotoCamera
@@ -90,6 +92,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -104,6 +108,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -118,6 +123,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -145,6 +151,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -156,15 +163,33 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val Canvas = Color(0xFFF7F5F0)
-private val Ink = Color(0xFF15131A)
-private val Violet = Color(0xFF7357F6)
-private val VioletDark = Color(0xFF4C31D5)
-private val Lavender = Color(0xFFEDE8FF)
-private val Lime = Color(0xFFDFFF4F)
-private val Peach = Color(0xFFFFE5D7)
-private val Muted = Color(0xFF77727F)
-private val ClayWhite = Color(0xFFFFFEFB)
+private val CometPurple = Color(0xFF6852D6)
+private val CometPurpleDark = Color(0xFF5D45D2)
+private val CometLightBackground = Color(0xFFFFFFFF)
+private val CometLightSurface = Color(0xFFF8F8FA)
+private val CometLightBorder = Color(0xFFE8E8EC)
+private val CometDarkBackground = Color(0xFF0F0F10)
+private val CometDarkSurface = Color(0xFF1A1A1C)
+private val CometDarkBorder = Color(0xFF2A2A2E)
+
+private val Canvas: Color
+    @Composable get() = MaterialTheme.colorScheme.background
+private val Ink: Color
+    @Composable get() = MaterialTheme.colorScheme.onBackground
+private val Violet: Color
+    @Composable get() = MaterialTheme.colorScheme.primary
+private val VioletDark: Color
+    @Composable get() = MaterialTheme.colorScheme.primary
+private val Lavender: Color
+    @Composable get() = MaterialTheme.colorScheme.primaryContainer
+private val Lime: Color
+    @Composable get() = MaterialTheme.colorScheme.secondary
+private val Peach: Color
+    @Composable get() = MaterialTheme.colorScheme.errorContainer
+private val Muted: Color
+    @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val ClayWhite: Color
+    @Composable get() = MaterialTheme.colorScheme.surface
 
 private fun ConversationEntity.displayTitle(): String =
     if (!isGroup && !localTitle.isNullOrBlank()) localTitle else title
@@ -173,22 +198,65 @@ private enum class Page { CHATS, PEOPLE, CALLS, NEARBY, YOU }
 
 @Composable
 fun MowellApp(vm: MowellViewModel) {
-    val scheme = androidx.compose.material3.lightColorScheme(primary = Violet, secondary = Lime, background = Canvas, surface = ClayWhite, onPrimary = Color.White, onBackground = Ink)
     val session by vm.session.collectAsStateWithLifecycle()
     val update by vm.update.collectAsStateWithLifecycle()
     val showUpdate by vm.showUpdatePopup.collectAsStateWithLifecycle()
     val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
     val updateDownloading by vm.updateDownloading.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val themePreferences = remember(context) { context.getSharedPreferences("mowell_ui", android.content.Context.MODE_PRIVATE) }
+    var darkMode by remember { mutableStateOf(themePreferences.getBoolean("dark_mode", false)) }
+    val scheme = if (darkMode) darkColorScheme(
+        primary = Color(0xFF8D79F2),
+        onPrimary = Color.White,
+        primaryContainer = Color(0xFF2B244B),
+        onPrimaryContainer = Color(0xFFEAE5FF),
+        secondary = Color(0xFF8D79F2),
+        background = CometDarkBackground,
+        onBackground = Color(0xFFF4F2F8),
+        surface = CometDarkSurface,
+        onSurface = Color(0xFFF4F2F8),
+        surfaceVariant = Color(0xFF222225),
+        onSurfaceVariant = Color(0xFFAAA6B2),
+        outline = CometDarkBorder,
+        errorContainer = Color(0xFF442328)
+    ) else lightColorScheme(
+        primary = CometPurple,
+        onPrimary = Color.White,
+        primaryContainer = Color(0xFFF0EDFF),
+        onPrimaryContainer = Color(0xFF271B63),
+        secondary = CometPurple,
+        background = CometLightBackground,
+        onBackground = Color(0xFF141318),
+        surface = CometLightSurface,
+        onSurface = Color(0xFF141318),
+        surfaceVariant = Color(0xFFF2F2F5),
+        onSurfaceVariant = Color(0xFF727078),
+        outline = CometLightBorder,
+        errorContainer = Color(0xFFFFE9EB)
+    )
     var splash by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { delay(1_500); splash = false }
+    SideEffect {
+        (context as? Activity)?.window?.let { window ->
+            window.statusBarColor = scheme.background.toArgb()
+            window.navigationBarColor = scheme.background.toArgb()
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                isAppearanceLightStatusBars = !darkMode
+                isAppearanceLightNavigationBars = !darkMode
+            }
+        }
+    }
 
     MaterialTheme(colorScheme = scheme) {
         Surface(Modifier.fillMaxSize(), color = Canvas) {
             when {
                 splash -> SplashScreen()
                 session == null -> AuthScreen(vm)
-                else -> MainExperience(vm)
+                else -> MainExperience(vm, darkMode) { enabled ->
+                    darkMode = enabled
+                    themePreferences.edit().putBoolean("dark_mode", enabled).apply()
+                }
             }
         }
         if (showUpdate && update != null) {
@@ -211,11 +279,11 @@ private fun SplashScreen() {
         fade.animateTo(1f, tween(280))
         reveal.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
     }
-    Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color.White, Lavender, Canvas))), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(Canvas), contentAlignment = Alignment.Center) {
         Column(Modifier.graphicsLayer { scaleX = reveal.value; scaleY = reveal.value; alpha = fade.value }, horizontalAlignment = Alignment.CenterHorizontally) {
             OrbLogo(104.dp)
             Spacer(Modifier.height(24.dp))
-            Text("Mowell", fontSize = 42.sp, fontWeight = FontWeight.Black, color = Ink)
+            Text("Mowell", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Ink)
             Text("from Grapaxels", color = Violet, fontStyle = FontStyle.Italic, fontSize = 17.sp)
             Spacer(Modifier.height(10.dp))
             Text("FROM GRAPAXELS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
@@ -321,7 +389,7 @@ private fun AuthScreen(vm: MowellViewModel) {
 }
 
 @Composable
-private fun MainExperience(vm: MowellViewModel) {
+private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChanged: (Boolean) -> Unit) {
     val context = LocalContext.current
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
@@ -342,9 +410,9 @@ private fun MainExperience(vm: MowellViewModel) {
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
         else -> Scaffold(
             containerColor = Canvas,
-            topBar = { ClayHeader(vm) },
+            topBar = { ClayHeader(vm, page, darkMode, onThemeChanged) },
             bottomBar = {
-                NavigationBar(containerColor = ClayWhite, tonalElevation = 0.dp) {
+                NavigationBar(containerColor = ClayWhite, tonalElevation = 0.dp, modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline)) {
                     Nav(Page.CHATS, page, "Chats", Icons.Rounded.ChatBubble) { page = it }
                     Nav(Page.PEOPLE, page, "People", Icons.Rounded.Search) { page = it }
                     Nav(Page.CALLS, page, "Calls", Icons.Rounded.Call) { page = it }
@@ -354,7 +422,7 @@ private fun MainExperience(vm: MowellViewModel) {
             },
             floatingActionButton = {
                 if (page == Page.CHATS) Box {
-                    FloatingActionButton(onClick = { addMenu = true }, containerColor = Lime, contentColor = Ink, shape = RoundedCornerShape(18.dp)) { Icon(Icons.Rounded.Add, "New") }
+                    FloatingActionButton(onClick = { addMenu = true }, containerColor = Violet, contentColor = Color.White, shape = CircleShape) { Icon(Icons.Rounded.Add, "New") }
                     DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
                         DropdownMenuItem(text = { Text("Connect people") }, leadingIcon = { Icon(Icons.Rounded.Search, null) }, onClick = { addMenu = false; page = Page.PEOPLE })
                         DropdownMenuItem(text = { Text("Create group") }, leadingIcon = { Icon(Icons.Rounded.Groups, null) }, onClick = { addMenu = false; createGroup = true; vm.refreshSocial() })
@@ -367,26 +435,33 @@ private fun MainExperience(vm: MowellViewModel) {
                 Page.PEOPLE -> PeopleScreen(vm, Modifier.padding(padding)) { user -> vm.startChat(user) { conversationId -> openChat = conversationId } }
                 Page.CALLS -> CallsScreen(vm, Modifier.padding(padding)) { vm.launchCall(context, it) }
                 Page.NEARBY -> NearbyScreen(vm, Modifier.padding(padding))
-                Page.YOU -> SettingsScreen(vm, Modifier.padding(padding))
+                Page.YOU -> SettingsScreen(vm, Modifier.padding(padding), darkMode, onThemeChanged)
             }
         }
     }
 }
 
 @Composable
-private fun ClayHeader(vm: MowellViewModel) {
-    Row(Modifier.fillMaxWidth().background(Canvas).padding(horizontal = 14.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-        OrbLogo(38.dp); Spacer(Modifier.width(9.dp))
-        Column(Modifier.weight(1f)) { Text("Mowell", fontSize = 22.sp, fontWeight = FontWeight.Black); Text("from Grapaxels", color = Violet, fontStyle = FontStyle.Italic, fontSize = 10.sp) }
-        Row(Modifier.clip(RoundedCornerShape(18.dp)).background(if (vm.networkLabel().startsWith("Internet")) Lime else Peach).padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (vm.networkLabel().startsWith("Internet")) Icons.Rounded.Wifi else Icons.Rounded.Bluetooth, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(if (vm.networkLabel().startsWith("Internet")) "online" else "nearby", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+private fun ClayHeader(vm: MowellViewModel, page: Page, darkMode: Boolean, onThemeChanged: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().background(Canvas).border(1.dp, MaterialTheme.colorScheme.outline).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        OrbLogo(34.dp); Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(when (page) { Page.CHATS -> "Chats"; Page.PEOPLE -> "People"; Page.CALLS -> "Calls"; Page.NEARBY -> "Nearby"; Page.YOU -> "You" }, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(if (vm.networkLabel().startsWith("Internet")) Color(0xFF20B26B) else Color(0xFFFFA928)))
+                Spacer(Modifier.width(5.dp))
+                Text(if (vm.networkLabel().startsWith("Internet")) "Online" else "Nearby mode", color = Muted, fontSize = 11.sp)
+            }
+        }
+        IconButton(onClick = { onThemeChanged(!darkMode) }) {
+            Icon(if (darkMode) Icons.Rounded.LightMode else Icons.Rounded.DarkMode, if (darkMode) "Use light theme" else "Use dark theme", tint = Violet)
         }
     }
 }
 
 @Composable
 private fun RowScope.Nav(target: Page, selected: Page, label: String, icon: ImageVector, onSelect: (Page) -> Unit) {
-    NavigationBarItem(selected = target == selected, onClick = { onSelect(target) }, icon = { Icon(icon, label) }, label = { Text(label, fontSize = 9.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = VioletDark, indicatorColor = Lavender))
+    NavigationBarItem(selected = target == selected, onClick = { onSelect(target) }, icon = { Icon(icon, label, Modifier.size(22.dp)) }, label = { Text(label, fontSize = 10.sp, fontWeight = if (target == selected) FontWeight.Bold else FontWeight.Normal) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = VioletDark, selectedTextColor = VioletDark, unselectedIconColor = Muted, unselectedTextColor = Muted, indicatorColor = Lavender))
 }
 
 @Composable
@@ -469,7 +544,7 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
         )
     }
 
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             ClayField(peopleQuery, { value -> peopleQuery = value.lowercase(); vm.searchUsers(value) }, "Search people by username", leading = Icons.Rounded.Search)
         }
@@ -520,20 +595,21 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit, onLongClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).shadow(6.dp, RoundedCornerShape(21.dp), ambientColor = Violet.copy(alpha = .12f), spotColor = Violet.copy(alpha = .17f)).clip(RoundedCornerShape(21.dp)).background(if (conversation.isGroup) Lavender else ClayWhite).border(1.dp, Color.White.copy(alpha = .8f), RoundedCornerShape(21.dp)).padding(horizontal = 13.dp, vertical = 11.dp)) {
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).clip(RoundedCornerShape(14.dp)).background(if (conversation.isGroup) Lavender else ClayWhite).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Avatar(conversation.displayTitle(), 46.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
-            Spacer(Modifier.width(11.dp))
+            Avatar(conversation.displayTitle(), 48.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(conversation.displayTitle(), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    if (conversation.isGroup) Text("  GROUP", color = Violet, fontWeight = FontWeight.Black, fontSize = 9.sp)
+                    Text(conversation.displayTitle(), fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    if (conversation.isGroup) Text("  Group", color = Violet, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
                 }
-                Text(conversation.subtitle, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                Spacer(Modifier.height(2.dp))
+                Text(conversation.subtitle, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text(time(conversation.updatedAt), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                if (conversation.unreadCount > 0) Box(Modifier.padding(top = 6.dp).clip(CircleShape).background(Violet).padding(horizontal = 8.dp, vertical = 3.dp)) { Text(conversation.unreadCount.coerceAtMost(99).toString(), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black) }
+                Text(time(conversation.updatedAt), color = if (conversation.unreadCount > 0) Violet else Muted, fontSize = 11.sp, fontWeight = if (conversation.unreadCount > 0) FontWeight.Bold else FontWeight.Normal)
+                if (conversation.unreadCount > 0) Box(Modifier.padding(top = 5.dp).clip(CircleShape).background(Violet).padding(horizontal = 7.dp, vertical = 2.dp)) { Text(conversation.unreadCount.coerceAtMost(99).toString(), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }
@@ -631,7 +707,6 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
     LaunchedEffect(Unit) { while (true) { vm.refreshSocial(); delay(4_000) } }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Text("Connect people", fontSize = 23.sp, fontWeight = FontWeight.Black)
             Text("Both people must accept before chatting.", color = Muted, fontSize = 12.sp)
             Spacer(Modifier.height(7.dp))
             ClayField(query, { query = it.lowercase(); vm.searchUsers(it) }, "Search username", leading = Icons.Rounded.Search)
@@ -679,10 +754,9 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
 @Composable
 private fun CallsScreen(vm: MowellViewModel, modifier: Modifier, onCall: (CallSession) -> Unit) {
     val conversations by vm.conversations.collectAsStateWithLifecycle()
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Text("Calls", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("Adaptive real-time media on internet. Voice-first nearby mode.", color = Muted) }
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { Text("Recent voice and video calls", color = Muted, fontSize = 13.sp) }
         items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation -> CallHistoryCard(vm, conversation, onCall) }
-        item { ClayCard(Peach) { Text("HD/4K is selected only when bandwidth, camera, CPU and thermal limits allow it. Real-time calls use adaptive WebRTC buffering—not media pre-downloading—so latency stays conversational.", fontSize = 13.sp, color = Ink) } }
     }
 }
 
@@ -722,12 +796,9 @@ private fun NearbyScreen(vm: MowellViewModel, modifier: Modifier) {
     var refresh by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { vm.bluetooth.startListening() }
     val peers = remember(refresh) { vm.bluetooth.bondedPeers() }
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
-            Text("Nearby mesh", fontSize = 30.sp, fontWeight = FontWeight.Black)
             Text("Store locally, send to a paired peer, and keep working without internet.", color = Muted)
-            Spacer(Modifier.height(8.dp))
-            ClayCard(Lavender) { Text("Bitchat-inspired principles: offline-first IDs, duplicate-safe packets, hop limits and store-and-forward-ready routing. This Android 7 build uses reliable paired RFCOMM links; BLE relay expansion remains a separate radio layer.", fontSize = 13.sp) }
         }
         items(peers) { (name, address) ->
             val chosen = vm.selectedPeer == address
@@ -740,7 +811,7 @@ private fun NearbyScreen(vm: MowellViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
+private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier, darkMode: Boolean, onThemeChanged: (Boolean) -> Unit) {
     val session by vm.session.collectAsStateWithLifecycle()
     val update by vm.update.collectAsStateWithLifecycle()
     val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
@@ -765,14 +836,28 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
             dismissButton = { OutlinedButton(onClick = { editingName = false }) { Text("Cancel") } }
         )
     }
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Text("You", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("Identity and privacy.", color = Muted) }
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { Text("Account, appearance and privacy", color = Muted, fontSize = 13.sp) }
         item {
             ClayCard(Lavender) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Avatar(session?.user?.displayName ?: "M", 62.dp, Violet, session?.user?.avatarUrl); Spacer(Modifier.width(13.dp)); Column { Text(session?.user?.displayName ?: "Mowell user", fontWeight = FontWeight.Black, fontSize = 20.sp); Text("@${session?.user?.username}", color = Violet); Text(session?.user?.email.orEmpty(), color = Muted, fontSize = 12.sp) } }
                 Spacer(Modifier.height(12.dp)); Text("You stay signed in on this phone until you use Log out below.", fontSize = 12.sp, color = Muted)
                 OutlinedButton(onClick = { photoPicker.launch("image/*") }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Update profile picture") }
                 OutlinedButton(onClick = { editingName = true }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Edit display name") }
+            }
+        }
+        item {
+            ClayCard(ClayWhite) {
+                Text("Appearance", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (darkMode) Icons.Rounded.DarkMode else Icons.Rounded.LightMode, null, tint = Violet)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(if (darkMode) "Dark mode" else "Light mode", fontWeight = FontWeight.Bold)
+                        Text("Match the CometChat light and dark UI", color = Muted, fontSize = 12.sp)
+                    }
+                    Switch(checked = darkMode, onCheckedChange = onThemeChanged)
+                }
             }
         }
         item {
@@ -799,7 +884,7 @@ private fun SettingsScreen(vm: MowellViewModel, modifier: Modifier) {
         item {
             ClayCard(ClayWhite) {
                 Text("App updates", fontWeight = FontWeight.Black, fontSize = 18.sp)
-                Text("Installed version ${BuildConfig.VERSION_NAME}", color = Muted, fontSize = 12.sp)
+                Text("Installed version ${BuildConfig.VERSION_NAME} · build ${BuildConfig.VERSION_CODE}", color = Muted, fontSize = 12.sp)
                 Text(updateStatus, color = if (update != null) Violet else Muted, fontSize = 13.sp)
                 if (update != null) Button(onClick = { (context as? Activity)?.let(vm::installUpdate) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp)) { Icon(Icons.Rounded.CloudDownload, null); Spacer(Modifier.width(8.dp)); Text("Update to ${update!!.versionName}") }
                 else OutlinedButton(onClick = vm::checkForUpdates, Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp)) { Text("Check for updates") }
@@ -1030,14 +1115,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     Scaffold(
         containerColor = Canvas,
         topBar = {
-            Column(Modifier.fillMaxWidth().background(Canvas)) {
-                Row(Modifier.fillMaxWidth().padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.fillMaxWidth().background(Canvas).border(1.dp, MaterialTheme.colorScheme.outline)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
                     Row(Modifier.weight(1f).clickable { conversation?.let(profile) }, verticalAlignment = Alignment.CenterVertically) {
                         Avatar(conversation?.displayTitle() ?: "M", 42.dp, Violet, conversation?.avatarUrl); Spacer(Modifier.width(9.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(conversation?.displayTitle() ?: "Conversation", fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(vm.networkLabel(), color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(conversation?.displayTitle() ?: "Conversation", fontWeight = FontWeight.SemiBold, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (typing.isNotEmpty()) TypingLine(typing.joinToString(", ")) else Text(if (vm.networkLabel().startsWith("Internet")) "Online" else "Nearby", color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     IconButton(enabled = conversation?.blocked != true, onClick = { call(vm.createCall(conversationId, conversation?.displayTitle() ?: "Mowell call", false)) }) { Icon(Icons.Rounded.Call, "Voice", tint = if (conversation?.blocked == true) Muted else Violet) }
@@ -1077,14 +1162,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         leadingIcon = { Icon(Icons.Rounded.Search, null) },
                         trailingIcon = { IconButton(onClick = { chatQuery = ""; searchOpen = false }) { Icon(Icons.Rounded.Close, "Close search") } },
                         singleLine = true,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)
                     )
                 }
             }
         },
         bottomBar = {
-            Column(Modifier.fillMaxWidth().background(Canvas)) {
+            Column(Modifier.fillMaxWidth().background(Canvas).border(1.dp, MaterialTheme.colorScheme.outline)) {
                 AnimatedVisibility(replyTo != null) {
                     Row(Modifier.fillMaxWidth().background(Lavender).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) { Text("Replying to ${replyTo?.sender.orEmpty()}", color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text(replyTo?.body.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Muted, fontSize = 11.sp) }
@@ -1097,7 +1182,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         Text("Messaging and calling are unavailable for this blocked contact.", Modifier.weight(1f), color = Ink, fontSize = 13.sp)
                         if (conversation.blockedByMe) OutlinedButton(onClick = { vm.setUserBlocked(conversationId, false) }) { Text("Unblock") }
                     }
-                } else Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
+                } else Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.Bottom) {
                 Box {
                     IconButton(enabled = !voiceRecording, onClick = { attachments = true }) { Icon(Icons.Rounded.AttachFile, "Share", tint = if (voiceRecording) Muted else Violet) }
                     DropdownMenu(expanded = attachments, onDismissRequest = { attachments = false }) {
@@ -1114,14 +1199,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Rounded.ContactPhone, null) }, onClick = { attachments = false; contactPicker.launch(null) })
                     }
                 }
-                TextField(value = text, enabled = !voiceRecording, onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) }, placeholder = { Text(if (voiceRecording) "Recording… tap the mic to send" else "Write something…") }, modifier = Modifier.weight(1f).heightIn(min = 54.dp, max = 132.dp).shadow(6.dp, RoundedCornerShape(22.dp)), minLines = 1, maxLines = 5, shape = RoundedCornerShape(22.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, disabledContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
+                TextField(value = text, enabled = !voiceRecording, onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) }, placeholder = { Text(if (voiceRecording) "Recording… tap the mic to send" else "Message") }, modifier = Modifier.weight(1f).heightIn(min = 50.dp, max = 132.dp).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)), minLines = 1, maxLines = 5, shape = RoundedCornerShape(24.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, disabledContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
                 Spacer(Modifier.width(8.dp)); IconButton(
                     onClick = {
                         if (text.isNotBlank()) send()
                         else if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId)
                     },
-                    modifier = Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(if (voiceRecording) Color(0xFFFFC7CB) else Lime)
-                ) { Icon(if (text.isNotBlank()) Icons.Rounded.Send else Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else if (text.isNotBlank()) "Send" else "Record voice message", tint = if (voiceRecording) Color(0xFFB3261E) else Ink) }
+                    modifier = Modifier.size(50.dp).clip(CircleShape).background(if (voiceRecording) Color(0xFFFFC7CB) else Violet)
+                ) { Icon(if (text.isNotBlank()) Icons.Rounded.Send else Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else if (text.isNotBlank()) "Send" else "Record voice message", tint = if (voiceRecording) Color(0xFFB3261E) else Color.White) }
                 }
             }
         },
@@ -1133,9 +1218,9 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         val target = displayedMessages.size + if (typingItem) 1 else 0
                         if (target > 0) scope.launch { listState.animateScrollToItem(target - 1) }
                     },
-                    containerColor = Lime,
-                    contentColor = Ink,
-                    shape = RoundedCornerShape(18.dp)
+                    containerColor = Violet,
+                    contentColor = Color.White,
+                    shape = CircleShape
                 ) { Icon(Icons.Rounded.KeyboardArrowDown, "Scroll to latest") }
             }
         }
@@ -1156,7 +1241,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
 private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.widthIn(min = 88.dp, max = 310.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(18.dp)).padding(horizontal = 12.dp, vertical = 9.dp)) {
+        Box(Modifier.widthIn(min = 88.dp, max = 310.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (message.outgoing) 16.dp else 4.dp, bottomEnd = if (message.outgoing) 4.dp else 16.dp)).background(if (message.outgoing) Violet else ClayWhite).border(1.dp, if (message.outgoing) Violet else MaterialTheme.colorScheme.outline, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (message.outgoing) 16.dp else 4.dp, bottomEnd = if (message.outgoing) 4.dp else 16.dp)).padding(horizontal = 12.dp, vertical = 9.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 when (message.kind) {
@@ -1214,7 +1299,8 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                     )
                     else -> Text(message.body, color = foreground)
                 }
-                Row(Modifier.align(Alignment.End)) { Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .7f) else Muted, fontSize = 9.sp); Spacer(Modifier.width(5.dp)); Text(route(message.route), color = if (message.outgoing) Lime else Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+                Spacer(Modifier.height(3.dp))
+                Row(Modifier.align(Alignment.End)) { Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted, fontSize = 10.sp); Spacer(Modifier.width(5.dp)); Text(route(message.route), color = if (message.outgoing) Color.White.copy(alpha = .82f) else Violet, fontSize = 9.sp, fontWeight = FontWeight.SemiBold) }
             }
         }
     }
@@ -1225,13 +1311,13 @@ private fun CallButton(icon: ImageVector, label: String, color: Color, click: ()
 
 @Composable
 private fun ClayCard(color: Color, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.fillMaxWidth().shadow(10.dp, RoundedCornerShape(26.dp), ambientColor = Violet.copy(alpha = .16f), spotColor = Violet.copy(alpha = .22f)).clip(RoundedCornerShape(26.dp)).background(color).border(1.5.dp, Color.White.copy(alpha = .85f), RoundedCornerShape(26.dp)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp), content = content)
+    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(color).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }
 
 @Composable
 private fun ClayField(value: String, change: (String) -> Unit, label: String, password: Boolean = false, leading: ImageVector? = null) {
     var reveal by remember { mutableStateOf(false) }
-    OutlinedTextField(value = value, onValueChange = change, label = { Text(label) }, leadingIcon = leading?.let { icon -> { Icon(icon, null, tint = Violet) } }, trailingIcon = if (password) {{ IconButton(onClick = { reveal = !reveal }) { Icon(if (reveal) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (reveal) "Hide password" else "Show password", tint = Violet) } }} else null, visualTransformation = if (password && !reveal) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None, singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), shape = RoundedCornerShape(18.dp))
+    OutlinedTextField(value = value, onValueChange = change, label = { Text(label) }, leadingIcon = leading?.let { icon -> { Icon(icon, null, tint = Violet) } }, trailingIcon = if (password) {{ IconButton(onClick = { reveal = !reveal }) { Icon(if (reveal) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (reveal) "Hide password" else "Show password", tint = Violet) } }} else null, visualTransformation = if (password && !reveal) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None, singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), shape = RoundedCornerShape(12.dp))
 }
 
 @Composable
@@ -1250,7 +1336,7 @@ private fun Avatar(name: String, size: Dp, color: Color, avatarUrl: String? = nu
             }.getOrNull()
         }
     }
-    Box(Modifier.size(size).shadow(5.dp, CircleShape).clip(CircleShape).background(color).border(2.dp, Color.White.copy(alpha = .8f), CircleShape), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(size).clip(CircleShape).background(color).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape), contentAlignment = Alignment.Center) {
         if (bitmap != null) Image(bitmap!!.asImageBitmap(), name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Text(name.take(1).uppercase(), color = if (color == Lime) Ink else Color.White, fontSize = (size.value * .40f).sp, fontWeight = FontWeight.Black)
     }
@@ -1275,7 +1361,7 @@ private fun TypingBubble(names: String) {
     var phase by remember(names) { mutableStateOf(0) }
     LaunchedEffect(names) { while (true) { delay(180); phase = (phase + 1) % 3 } }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        Column(Modifier.shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(ClayWhite).border(1.dp, Color.White, RoundedCornerShape(18.dp)).padding(horizontal = 15.dp, vertical = 10.dp)) {
+        Column(Modifier.clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 16.dp)).background(ClayWhite).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 16.dp)).padding(horizontal = 15.dp, vertical = 10.dp)) {
             Text("$names typing", color = Muted, fontSize = 10.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
                 repeat(3) { index ->

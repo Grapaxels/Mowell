@@ -237,14 +237,18 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         updateTyping(conversationId, false)
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val trimmedBody = body.trim()
+        val message = MessageEntity(id, conversationId, "You", trimmedBody, now, true, "ROUTING", "sending", kind)
+        // Update the open chat synchronously so the send action feels instant;
+        // database persistence and transport acknowledgement never block the UI.
+        dao.stageOutgoingMessage(message)
         viewModelScope.launch {
-            val id = UUID.randomUUID().toString()
-            val now = System.currentTimeMillis()
-            val message = MessageEntity(id, conversationId, "You", body.trim(), now, true, "ROUTING", "sending", kind)
             dao.insertMessage(message)
             val existing = conversations.value.find { it.id == conversationId }
             dao.upsertConversation(existing?.copy(subtitle = preview(message), updatedAt = now) ?: ConversationEntity(conversationId, "Conversation", preview(message), false, now))
-            val payload = JSONObject().put("clientId", id).put("body", body.trim()).put("kind", kind).toString()
+            val payload = JSONObject().put("clientId", id).put("body", trimmedBody).put("kind", kind).toString()
             val result = router.send(conversationId, selectedPeer, payload)
             dao.updateDelivery(id, if (result.delivered) "sent" else "stored", result.route.name)
             if (kind == "text" && NotificationPreferences.sendSound(getApplication())) playSendTone()

@@ -20,6 +20,16 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
     fun observeMessages(conversationId: String): Flow<List<MessageEntity>> =
         messageFlows.getOrPut(conversationId) { MutableStateFlow(loadMessages(conversationId)) }
 
+    /**
+     * Publishes a new outgoing item to an already-open conversation immediately.
+     * SQLite persistence and network routing continue asynchronously afterward.
+     */
+    fun stageOutgoingMessage(message: MessageEntity) {
+        messageFlows[message.conversationId]?.let { flow ->
+            flow.value = (flow.value.filterNot { it.id == message.id } + message).sortedBy { it.sentAt }
+        }
+    }
+
     suspend fun getConversation(id: String): ConversationEntity? = withContext(Dispatchers.IO) {
         loadConversation(id)
     }
