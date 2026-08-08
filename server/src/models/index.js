@@ -108,12 +108,20 @@ export const Media = mongoose.model("Media", mediaSchema);
 const callSignalSchema = new mongoose.Schema({
   room: { type: String, required: true, index: true, maxlength: 100 },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  // A client-generated id makes signaling retries safe. Without it, a brief
+  // serverless/Mongo failure can either lose an ICE candidate or duplicate an
+  // SDP offer when the Android client retries the request.
+  clientId: { type: String, maxlength: 180 },
   target: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   type: { type: String, enum: ["join", "offer", "answer", "ice", "leave", "media"], required: true },
   payload: { type: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, default: () => new Date(Date.now() + 60 * 60 * 1000), expires: 0 }
 }, { timestamps: true });
 callSignalSchema.index({ room: 1, _id: 1 });
+callSignalSchema.index(
+  { room: 1, sender: 1, clientId: 1 },
+  { unique: true, partialFilterExpression: { clientId: { $type: "string" } } }
+);
 
 export const CallSignal = mongoose.model("CallSignal", callSignalSchema);
 

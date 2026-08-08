@@ -15,6 +15,7 @@ import com.grapaxels.mowell.MainActivity
 import com.grapaxels.mowell.MowellApplication
 import com.grapaxels.mowell.R
 import com.grapaxels.mowell.auth.AuthRepository
+import com.grapaxels.mowell.call.CallCoordinator
 import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
 import com.grapaxels.mowell.transport.Route
@@ -41,6 +42,7 @@ class MessageSyncService : Service() {
     private lateinit var updater: AppUpdater
     private var nextUpdateCheckAt = 0L
     private var nextSocialCheckAt = 0L
+    private var nextFullMessageSyncAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -50,7 +52,14 @@ class MessageSyncService : Service() {
         startForeground(SERVICE_NOTIFICATION_ID, serviceNotification())
         scope.launch {
             while (isActive) {
-                runCatching { syncMessages() }
+                val now = System.currentTimeMillis()
+                if (now >= nextFullMessageSyncAt) {
+                    runCatching { syncMessages() }
+                    nextFullMessageSyncAt = System.currentTimeMillis() + 15_000L
+                }
+                // This request waits on the Mowell API and returns as soon as a
+                // message changes, normally within one 250 ms backend check.
+                runCatching { syncMessageChanges() }
                 if (System.currentTimeMillis() >= nextSocialCheckAt) {
                     runCatching { syncApprovalRequests() }
                     nextSocialCheckAt = System.currentTimeMillis() + 5_000L
@@ -59,7 +68,7 @@ class MessageSyncService : Service() {
                     runCatching { checkForUpdate() }
                     nextUpdateCheckAt = System.currentTimeMillis() + 30 * 60 * 1000L
                 }
-                delay(800)
+                delay(40)
             }
         }
     }
@@ -146,6 +155,49 @@ class MessageSyncService : Service() {
                 notifier.show(remote.title, forcedCallAlert!!, 1, remote.avatarUrl)
             }
         }
+    }
+
+    private suspend fun syncMessageChanges() {
+        val session = auth.savedSession ?: return
+        val state = getSharedPreferences("mowell_fast_message_sync", Context.MODE_PRIVATE)
+        val cursorKey = "cursor:${session.user.id}"
+        val cursor = if (state.contains(cursorKey)) state.getLong(cursorKey, 0L) else (System.currentTimeMillis() - 2_000L).also {
+            state.edit().putLong(cursorKey, it).apply()
+        }
+        val fetched = auth.fetchMessageChanges(cursor).getOrNull() ?: return
+        if (fetched.isEmpty()) return
+        val dao = (application as MowellApplication).database.dao()
+        val hidden = getSharedPreferences("mowell_hidden_messages", Context.MODE_PRIVATE)
+        fetched.forEach { item ->
+            if (hidden.getStringSet(item.conversationId, emptySet()).orEmpty().contains(item.id)) return@forEach
+            val alreadyStored = dao.hasMessage(item.id)
+            val message = MessageEntity(
+                item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
+                item.body, item.sentAt, item.outgoing, Route.INTERNET.name, item.delivery, item.kind,
+                item.attachmentId, item.attachmentMime, item.attachmentName, item.editedAt,
+                item.replyToId, item.threadRootId, item.reactions, item.metadata
+            )
+            dao.insertMessage(message)
+            val current = dao.getConversation(item.conversationId)
+            if (!alreadyStored && !item.outgoing) {
+                dao.revealConversationOnIncoming(item.conversationId, item.sentAt)
+                if (item.kind == "call_end") notifier.clearConversation(item.conversationId)
+                else {
+                    val unread = dao.incrementUnread(item.conversationId)
+                    notifier.show(current?.title ?: item.sender, message, unread, current?.avatarUrl)
+                }
+            }
+            if (!item.outgoing && item.kind == "call_end") {
+                runCatching { JSONObject(item.body).optString("room") }.getOrNull()?.takeIf { it.isNotBlank() }?.let {
+                    CallCoordinator.endIfActive(application, it)
+                }
+            }
+            if (current != null && item.syncAt >= current.updatedAt) {
+                dao.upsertConversation(current.copy(subtitle = preview(item.kind, item.body, item.attachmentName), updatedAt = item.sentAt))
+            }
+        }
+        val latest = fetched.maxOfOrNull { it.syncAt } ?: cursor
+        if (latest > cursor) state.edit().putLong(cursorKey, latest).apply()
     }
 
     private suspend fun checkForUpdate() {

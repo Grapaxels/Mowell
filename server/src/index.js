@@ -669,6 +669,59 @@ app.delete("/v1/conversations/:id/block", auth, async (req, res) => {
   res.json({ ok: true, blocked: blockedBy.length > 0, blockedByMe: blockedBy.some((id) => String(id) === req.auth.sub) });
 });
 
+// One long-poll replaces the old N+1 loop that fetched every conversation on
+// every refresh. It returns as soon as any message or receipt changes, giving
+// active devices sub-second delivery without WebSockets, FCM, or another
+// hosted service. The bounded wait remains compatible with Vercel functions.
+app.get("/v1/messages/changes", auth, async (req, res) => {
+  try {
+    const after = new Date(String(req.query.after || ""));
+    if (Number.isNaN(after.getTime())) return res.status(400).json({ error: "A valid after time is required" });
+    const requestedWait = Number(req.query.waitMs || 3_500);
+    const waitMs = Number.isFinite(requestedWait) ? Math.min(4_000, Math.max(0, requestedWait)) : 3_500;
+    const conversations = await Conversation.find({ members: req.auth.sub }).select("_id members").lean();
+    const conversationIds = conversations.map((item) => item._id);
+    if (!conversationIds.length) return res.json({ messages: [] });
+    const conversationById = new Map(conversations.map((item) => [item._id.toString(), item]));
+    const deadline = Date.now() + waitMs;
+    let messages = [];
+    do {
+      messages = await Message.find({
+        conversation: { $in: conversationIds },
+        $or: [{ sentAt: { $gt: after } }, { updatedAt: { $gt: after } }]
+      }).sort({ updatedAt: 1, _id: 1 }).limit(200)
+        .populate("sender", "username displayName avatarUrl")
+        .populate("attachment", "fileName mimeType size");
+      if (messages.length || Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    } while (true);
+    const incomingIds = messages
+      .filter((message) => String(message.sender?._id || message.sender) !== req.auth.sub)
+      .map((message) => message._id);
+    if (incomingIds.length) {
+      await Message.updateMany(
+        { _id: { $in: incomingIds }, deliveredTo: { $ne: req.auth.sub } },
+        { $addToSet: { deliveredTo: req.auth.sub } }
+      );
+    }
+    const result = messages.map((message) => {
+      const item = message.toObject();
+      const conversationId = String(message.conversation);
+      const senderId = String(message.sender?._id || message.sender);
+      if (senderId === req.auth.sub) {
+        const members = conversationById.get(conversationId)?.members?.map(String) || [];
+        const otherIds = members.filter((id) => id !== req.auth.sub);
+        const seen = (message.seenBy || []).some((id) => otherIds.includes(String(id)));
+        const delivered = (message.deliveredTo || []).some((id) => otherIds.includes(String(id)));
+        item.delivery = seen ? "seen" : delivered ? "delivered" : "sent";
+      } else item.delivery = "received";
+      item.conversationId = conversationId;
+      return item;
+    });
+    res.json({ messages: result });
+  } catch { res.status(400).json({ error: "Could not synchronize message changes" }); }
+});
+
 app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("members isGroup");
   if (!conversation) return res.sendStatus(404);
@@ -1012,9 +1065,29 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
       call.video = true;
       await call.save();
     }
+    const clientId = String(req.body.clientId || "").trim() || null;
+    if (clientId && !/^[A-Za-z0-9._:-]{8,180}$/.test(clientId)) return res.status(400).json({ error: "Invalid call signal id" });
     const target = req.body.target ? String(req.body.target) : null;
     if (target && !call.participants.some((id) => id.toString() === target)) return res.sendStatus(403);
-    const signal = await CallSignal.create({ room, sender: req.auth.sub, target, type, payload: req.body.payload || {} });
+    const value = { room, sender: req.auth.sub, target, type, payload: req.body.payload || {} };
+    if (clientId) value.clientId = clientId;
+    let signal;
+    if (clientId) {
+      try {
+        signal = await CallSignal.findOneAndUpdate(
+          { room, sender: req.auth.sub, clientId },
+          { $setOnInsert: value },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+      } catch (error) {
+        // Two retries may reach different Vercel instances simultaneously.
+        // The unique id means both represent the same signal, so return the
+        // already-created record instead of turning that race into a 400.
+        if (error?.code !== 11000) throw error;
+        signal = await CallSignal.findOne({ room, sender: req.auth.sub, clientId });
+        if (!signal) throw error;
+      }
+    } else signal = await CallSignal.create(value);
     if (type === "leave") {
       call.activeParticipants = (call.activeParticipants || []).filter((id) => id.toString() !== req.auth.sub);
       // A 3+ person call continues for the remaining 3+ connected members.

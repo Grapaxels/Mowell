@@ -442,6 +442,30 @@ class AuthRepository(context: Context) {
         }
     }
 
+    /**
+     * Waits briefly for message changes across every conversation. One request
+     * replaces repeatedly downloading the last 100 messages from every chat.
+     */
+    suspend fun fetchMessageChanges(afterMillis: Long): Result<List<RemoteMessage>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val after = java.net.URLEncoder.encode(isoDate(afterMillis), "UTF-8")
+            client.newCall(Request.Builder().url("$serverUrl/v1/messages/changes?after=$after&waitMs=3500")
+                .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Message change sync failed"))
+                val array = json.optJSONArray("messages") ?: return@runCatching emptyList()
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.getJSONObject(index)
+                        val conversationId = item.optString("conversationId")
+                        if (conversationId.isNotBlank()) add(parseMessage(item, conversationId, session))
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun markConversationRead(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val session = savedSession ?: error("Not signed in")
