@@ -149,6 +149,9 @@ const auth = async (req, res, next) => {
     const user = await User.findById(req.auth.sub).select("email emailVerified");
     if (!user) return res.status(401).json({ error: "Account not found" });
     if (!user.emailVerified) return res.status(403).json({ error: "Verify your email to continue", verificationRequired: true, email: user.email });
+    // Every authenticated poll doubles as a lightweight presence heartbeat.
+    // This keeps online/delivered ticks accurate without a third-party socket service.
+    await User.updateOne({ _id: req.auth.sub }, { $set: { lastSeenAt: new Date() } });
     next();
   } catch { res.status(401).json({ error: "Invalid or expired session" }); }
 };
@@ -571,7 +574,12 @@ app.post("/v1/conversations/:id/banned/:userId", auth, async (req, res) => {
 app.delete("/v1/conversations/:id/banned/:userId", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
   if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can unban members" });
-  await Conversation.updateOne({ _id: conversation._id }, { $pull: { bannedMembers: req.params.userId } });
+  // Unban restores membership. Previously only the ban marker was removed,
+  // leaving the person silently outside the group.
+  await Conversation.updateOne({ _id: conversation._id }, {
+    $pull: { bannedMembers: req.params.userId },
+    $addToSet: { members: req.params.userId }
+  });
   res.json({ ok: true });
 });
 
@@ -662,8 +670,12 @@ app.delete("/v1/conversations/:id/block", auth, async (req, res) => {
 });
 
 app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
-  const allowed = await Conversation.exists({ _id: req.params.id, members: req.auth.sub });
-  if (!allowed) return res.sendStatus(404);
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("members isGroup");
+  if (!conversation) return res.sendStatus(404);
+  await Message.updateMany(
+    { conversation: conversation._id, sender: { $ne: req.auth.sub }, deliveredTo: { $ne: req.auth.sub } },
+    { $addToSet: { deliveredTo: req.auth.sub } }
+  );
   const filter = { conversation: req.params.id };
   if (req.query.after) {
     const after = new Date(String(req.query.after));
@@ -673,7 +685,28 @@ app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
   const messages = await Message.find(filter).sort({ sentAt: req.query.after ? 1 : -1 }).limit(100)
     .populate("sender", "username displayName avatarUrl")
     .populate("attachment", "fileName mimeType size");
-  res.json({ messages: req.query.after ? messages : messages.reverse() });
+  const otherIds = conversation.members.map(String).filter((id) => id !== req.auth.sub);
+  const onlineUsers = new Set((await User.find({ _id: { $in: otherIds }, lastSeenAt: { $gte: new Date(Date.now() - 70_000) } }).select("_id")).map((user) => user._id.toString()));
+  const withReceipts = messages.map((message) => {
+    const item = message.toObject();
+    if (String(message.sender?._id || message.sender) === req.auth.sub) {
+      const seen = (message.seenBy || []).some((id) => String(id) !== req.auth.sub);
+      const online = otherIds.some((id) => onlineUsers.has(id));
+      item.delivery = seen ? "seen" : online ? "delivered" : "sent";
+    } else item.delivery = "received";
+    return item;
+  });
+  res.json({ messages: req.query.after ? withReceipts : withReceipts.reverse() });
+});
+
+app.post("/v1/conversations/:id/messages/read", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  if (!conversation) return res.sendStatus(404);
+  await Message.updateMany(
+    { conversation: conversation._id, sender: { $ne: req.auth.sub }, seenBy: { $ne: req.auth.sub } },
+    { $addToSet: { deliveredTo: req.auth.sub, seenBy: req.auth.sub } }
+  );
+  res.json({ ok: true });
 });
 
 app.post("/v1/conversations/:id/messages", auth, async (req, res) => {

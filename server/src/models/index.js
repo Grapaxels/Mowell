@@ -51,6 +51,8 @@ const messageSchema = new mongoose.Schema({
     emoji: { type: String, required: true, maxlength: 16 }
   }],
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+  deliveredTo: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  seenBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   sentAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 messageSchema.index({ conversation: 1, clientId: 1 }, { unique: true });

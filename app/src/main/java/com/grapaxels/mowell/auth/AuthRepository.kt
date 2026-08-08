@@ -45,6 +45,7 @@ data class RemoteMessage(
     val threadRootId: String? = null,
     val reactions: String = "{}",
     val metadata: String = "{}",
+    val delivery: String = "sent",
     val syncAt: Long = sentAt
 )
 
@@ -441,6 +442,17 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun markConversationRead(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/read")
+                .header("Authorization", "Bearer ${session.token}")
+                .post("{}".toRequestBody(jsonType)).build()).execute().use { response ->
+                if (!response.isSuccessful) error("Could not update read receipt")
+            }
+        }
+    }
+
     suspend fun uploadAttachment(conversationId: String, clientId: String, fileName: String, mimeType: String, data: ByteArray): Result<RemoteMessage> = withContext(Dispatchers.IO) {
         runCatching {
             require(data.size <= 2_621_440) { "Attachment must be 2.5 MB or smaller" }
@@ -583,6 +595,7 @@ class AuthRepository(context: Context) {
             item.optString("threadRootClientId").takeIf { it.isNotBlank() && it != "null" },
             reactionCounts.toString(),
             (item.optJSONObject("metadata") ?: JSONObject()).toString(),
+            item.optString("delivery", if (senderId == session.user.id) "sent" else "received"),
             maxOf(parseDate(item.optString("updatedAt")), parseDate(item.optString("sentAt")))
         )
     }

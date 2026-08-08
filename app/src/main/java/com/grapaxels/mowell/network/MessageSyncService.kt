@@ -109,7 +109,7 @@ class MessageSyncService : Service() {
                 val alreadyStored = dao.hasMessage(item.id)
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
-                    item.body, item.sentAt, item.outgoing, Route.INTERNET.name, "sent", item.kind,
+                    item.body, item.sentAt, item.outgoing, Route.INTERNET.name, item.delivery, item.kind,
                     item.attachmentId, item.attachmentMime, item.attachmentName
                 )
                 if (!alreadyStored) {

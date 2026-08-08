@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -186,6 +187,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Calendar
 import java.util.Locale
 
 private val CometPurple = Color(0xFF6852D6)
@@ -420,6 +422,7 @@ private fun AuthScreen(vm: MowellViewModel) {
 @Composable
 private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChanged: (Boolean) -> Unit) {
     val context = LocalContext.current
+    val actionBusy by vm.actionBusy.collectAsStateWithLifecycle()
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf<ConversationEntity?>(null) }
@@ -441,6 +444,7 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
         }
     }
     if (createGroup) CreateGroupDialog(vm, { createGroup = false }) { conversationId -> createGroup = false; openChat = conversationId }
+    Box(Modifier.fillMaxSize()) {
     when {
         settingsOpen -> Scaffold(containerColor = Canvas, topBar = { CometBackHeader("Settings", { settingsOpen = false }) }) { padding -> SettingsScreen(vm, Modifier.padding(padding).fillMaxSize(), darkMode, onThemeChanged) }
         nearbyOpen -> Scaffold(containerColor = Canvas, topBar = { CometBackHeader("Nearby", { nearbyOpen = false }) }) { padding -> NearbyScreen(vm, Modifier.padding(padding)) }
@@ -482,6 +486,15 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
             }
         }
     }
+    if (actionBusy) Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = .28f)).clickable(enabled = false) {},
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
+            CircularProgressIndicator(Modifier.padding(16.dp).size(30.dp), color = Violet, strokeWidth = 3.dp)
+        }
+    }
+    }
 }
 
 @Composable
@@ -496,6 +509,9 @@ private fun ClayHeader(vm: MowellViewModel, page: Page, darkMode: Boolean, onThe
             }
             if (page == Page.GROUPS) IconButton(onClick = { onAction(AppMenuAction.NEW_GROUP) }) { Icon(Icons.Rounded.PersonAdd, "Create group", tint = Violet) }
             if (page == Page.CHATS) {
+                IconButton(onClick = { onThemeChanged(!darkMode) }) {
+                    Icon(if (darkMode) Icons.Rounded.LightMode else Icons.Rounded.DarkMode, if (darkMode) "Use light mode" else "Use dark mode", tint = Ink)
+                }
                 Box(Modifier.clickable { onAction(AppMenuAction.PROFILE) }) { Avatar(session?.user?.displayName ?: "M", 40.dp, Violet, session?.user?.avatarUrl) }
                 Spacer(Modifier.width(2.dp))
                 Box {
@@ -1307,7 +1323,11 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     val cameraPicker = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
         if (captured) cameraUri?.let { vm.uploadAttachment(conversationId, it) }
     }
-    val timelineMessages = messages.filter { it.threadRootId.isNullOrBlank() }
+    val timelineMessages = messages.filter { message ->
+        message.threadRootId.isNullOrBlank() && !(message.kind == "call" && runCatching {
+            JSONObject(message.body).optString("room") in endedRooms
+        }.getOrDefault(false))
+    }
     val displayedMessages = if (chatQuery.isBlank()) timelineMessages else timelineMessages.filter { message ->
         message.body.contains(chatQuery, ignoreCase = true) ||
             message.attachmentName?.contains(chatQuery, ignoreCase = true) == true ||
@@ -1519,20 +1539,9 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         Text("Messaging and calling are unavailable for this blocked contact.", Modifier.weight(1f), color = Ink, fontSize = 13.sp)
                         if (conversation.blockedByMe) OutlinedButton(onClick = { vm.setUserBlocked(conversationId, false) }) { Text("Unblock") }
                     }
-                } else Column(Modifier.fillMaxWidth().background(ClayWhite).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                    TextField(
-                        value = text,
-                        enabled = !voiceRecording,
-                        onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) },
-                        placeholder = { Text(if (voiceRecording) "Recording… tap the microphone to send" else "Type your message...", color = Muted, fontSize = 14.sp) },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp, max = 96.dp),
-                        minLines = 1, maxLines = 4, shape = RoundedCornerShape(0.dp),
-                        colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, disabledContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() })
-                    )
-                    Row(Modifier.fillMaxWidth().height(38.dp), verticalAlignment = Alignment.CenterVertically) {
+                } else Row(Modifier.fillMaxWidth().background(Canvas).padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.Bottom) {
                         Box {
-                            IconButton(enabled = !voiceRecording, onClick = { attachments = true }, modifier = Modifier.size(38.dp)) { Icon(Icons.Rounded.Add, "Share", tint = Muted, modifier = Modifier.size(21.dp)) }
+                            IconButton(enabled = !voiceRecording, onClick = { attachments = true }, modifier = Modifier.size(42.dp)) { Icon(Icons.Rounded.Add, "Share", tint = Muted, modifier = Modifier.size(22.dp)) }
                             DropdownMenu(expanded = attachments, onDismissRequest = { attachments = false }) {
                                 DropdownMenuItem(text = { Text("Camera") }, leadingIcon = { Icon(Icons.Rounded.PhotoCamera, null) }, onClick = {
                                     attachments = false
@@ -1547,13 +1556,21 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                                 DropdownMenuItem(text = { Text("Poll or collaborative item") }, leadingIcon = { Icon(Icons.Rounded.Poll, null) }, onClick = { attachments = false; extrasOpen = true })
                             }
                         }
-                        IconButton(onClick = { if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId) }, modifier = Modifier.size(38.dp)) { Icon(Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else "Record voice message", tint = if (voiceRecording) Color(0xFFF44649) else Muted, modifier = Modifier.size(20.dp)) }
-                        IconButton(onClick = { extrasOpen = true }, modifier = Modifier.size(38.dp)) { Icon(Icons.Rounded.EmojiEmotions, "Emoji and stickers", tint = Muted, modifier = Modifier.size(20.dp)) }
-                        IconButton(onClick = { extrasOpen = true }, modifier = Modifier.size(38.dp)) { Icon(Icons.Rounded.Forum, "Stickers", tint = Muted, modifier = Modifier.size(20.dp)) }
-                        IconButton(onClick = { aiOpen = true }, modifier = Modifier.size(38.dp)) { Icon(Icons.Rounded.SmartToy, "AI tools", tint = Violet, modifier = Modifier.size(20.dp)) }
-                        Spacer(Modifier.weight(1f))
-                        IconButton(onClick = { if (text.isNotBlank()) send() }, modifier = Modifier.size(36.dp).clip(CircleShape).background(if (text.isNotBlank()) Violet else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Send, "Send", tint = if (text.isNotBlank()) Color.White else Muted, modifier = Modifier.size(19.dp)) }
-                    }
+                        TextField(
+                            value = text,
+                            enabled = !voiceRecording,
+                            onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) },
+                            placeholder = { Text(if (voiceRecording) "Recording… tap mic to send" else "Message", color = Muted, fontSize = 14.sp) },
+                            modifier = Modifier.weight(1f).heightIn(min = 46.dp, max = 108.dp),
+                            minLines = 1, maxLines = 4, shape = RoundedCornerShape(23.dp),
+                            trailingIcon = { IconButton(onClick = { extrasOpen = true }) { Icon(Icons.Rounded.EmojiEmotions, "Emoji and stickers", tint = Muted, modifier = Modifier.size(21.dp)) } },
+                            colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() })
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        IconButton(onClick = { if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId) }, modifier = Modifier.size(42.dp).clip(CircleShape).background(if (voiceRecording) Color(0xFFF44649) else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Mic, if (voiceRecording) "Stop and send recording" else "Record voice message", tint = if (voiceRecording) Color.White else Ink, modifier = Modifier.size(21.dp)) }
+                        Spacer(Modifier.width(5.dp))
+                        IconButton(enabled = text.isNotBlank(), onClick = { send() }, modifier = Modifier.size(42.dp).clip(CircleShape).background(if (text.isNotBlank()) Violet else MaterialTheme.colorScheme.surfaceVariant)) { Icon(Icons.Rounded.Send, "Send", tint = if (text.isNotBlank()) Color.White else Muted, modifier = Modifier.size(20.dp)) }
                 }
             }
         },
@@ -1574,7 +1591,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize().background(ChatCanvas), state = listState, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (chatQuery.isNotBlank() && displayedMessages.isEmpty()) item(key = "no-search-results") { Text("No matching messages or files", color = Muted, modifier = Modifier.fillMaxWidth().padding(24.dp)) }
-            items(displayedMessages, key = { it.id }) { message ->
+            itemsIndexed(displayedMessages, key = { _, message -> message.id }) { index, message ->
+                if (index == 0 || !sameCalendarDay(displayedMessages[index - 1].sentAt, message.sentAt)) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+                            Text(dateDividerLabel(message.sentAt), Modifier.padding(horizontal = 11.dp, vertical = 5.dp), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
                 val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
                 MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { actionTarget = message }, onReactionInfo = { reactionTarget = message }, onPollVote = { option -> vm.votePoll(message, option) }, openAttachment = { vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.displayTitle() ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
             }
@@ -1587,8 +1611,21 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
 @Composable
 private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, onReactionInfo: () -> Unit, onPollVote: (Int) -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
+    if (message.kind in setOf("system", "call", "call_end")) {
+        val label = when (message.kind) {
+            "call_end" -> callEndText(message.body)
+            "call" -> if (runCatching { JSONObject(message.body).optBoolean("video") }.getOrDefault(false)) "Video call started" else "Voice call started"
+            else -> message.body
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongPress)) {
+                Text(label, Modifier.padding(horizontal = 12.dp, vertical = 7.dp), color = Muted, fontSize = 12.sp, fontStyle = if (message.body == "This message was deleted") FontStyle.Italic else FontStyle.Normal)
+            }
+        }
+        return
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.widthIn(min = 64.dp, max = 286.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(12.dp)).background(if (message.outgoing) Violet else MaterialTheme.colorScheme.surfaceVariant).padding(8.dp)) {
+        Box(Modifier.widthIn(min = 64.dp, max = 286.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(12.dp)).background(if (message.outgoing) Violet else MaterialTheme.colorScheme.surfaceVariant).padding(8.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 if (!message.replyToId.isNullOrBlank()) {
@@ -1691,7 +1728,8 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                     Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted, fontSize = 9.sp)
                     if (message.outgoing) {
                         Spacer(Modifier.width(4.dp))
-                        Text(if (message.delivery == "sending") "✓" else "✓✓", color = if (message.delivery == "sent") Color(0xFF5DE2C1) else Color.White.copy(alpha = .7f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        val ticks = when (message.delivery) { "sending" -> "○"; "sent", "stored" -> "✓"; else -> "✓✓" }
+                        Text(ticks, color = if (message.delivery == "seen") Color(0xFF53BDEB) else Color.White.copy(alpha = .72f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1723,29 +1761,59 @@ private fun AudioMessageContent(message: MessageEntity, foreground: Color) {
     var downloading by remember(message.id) { mutableStateOf(false) }
     var player by remember(message.id) { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember(message.id) { mutableStateOf(false) }
+    var position by remember(message.id) { mutableStateOf(0) }
+    var duration by remember(message.id) { mutableStateOf(0) }
     DisposableEffect(message.id) { onDispose { player?.release() } }
+    LaunchedEffect(playing, player) {
+        while (playing) {
+            position = player?.currentPosition ?: 0
+            delay(120)
+        }
+    }
+    fun start(audioFile: File) {
+        val media = player ?: MediaPlayer().apply {
+            setDataSource(audioFile.absolutePath)
+            prepare()
+            duration = this.duration
+            setOnCompletionListener { playing = false; position = 0; seekTo(0) }
+        }.also { player = it }
+        if (media.isPlaying) { media.pause(); playing = false }
+        else { media.start(); playing = true }
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = {
+            if (message.delivery == "uploading") return@IconButton
             if (file == null && !downloading) {
                 val id = message.attachmentId ?: return@IconButton
                 downloading = true
                 scope.launch {
                     com.grapaxels.mowell.auth.AuthRepository(context).downloadAttachment(id).onSuccess { (_, bytes) ->
-                        file = withContext(Dispatchers.IO) { File(context.cacheDir, "audio_${message.id}.bin").apply { writeBytes(bytes) } }
+                        val cached = withContext(Dispatchers.IO) { File(context.cacheDir, "audio_${message.id}.m4a").apply { writeBytes(bytes) } }
+                        file = cached
+                        start(cached)
                     }
                     downloading = false
                 }
-            } else file?.let { audioFile ->
-                if (player == null) {
-                    player = MediaPlayer().apply { setDataSource(audioFile.absolutePath); prepare(); setOnCompletionListener { playing = false } }
-                }
-                player?.let { media -> if (media.isPlaying) { media.pause(); playing = false } else { media.start(); playing = true } }
-            }
+            } else file?.let(::start)
         }) {
-            when { downloading -> CircularProgressIndicator(Modifier.size(22.dp), color = foreground, strokeWidth = 2.dp); file == null -> Icon(Icons.Rounded.CloudDownload, "Download audio", tint = foreground); else -> Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play", tint = foreground) }
+            when { downloading || message.delivery == "uploading" -> CircularProgressIndicator(Modifier.size(22.dp), color = foreground, strokeWidth = 2.dp); else -> Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play voice message", tint = foreground) }
         }
-        Column(Modifier.weight(1f)) { Text(message.attachmentName ?: "Audio", color = foreground, fontWeight = FontWeight.SemiBold); Text(when { downloading -> "Downloading…"; file == null -> "Tap to download"; playing -> "Playing"; else -> "Ready to play" }, color = foreground.copy(alpha = .72f), fontSize = 11.sp) }
+        Column(Modifier.weight(1f)) {
+            val fraction = if (duration > 0) position.toFloat() / duration else 0f
+            Row(Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                repeat(24) { index ->
+                    val barHeight = (8 + ((index * 7 + message.id.hashCode()) and 15)).dp
+                    Box(Modifier.weight(1f).height(barHeight).clip(RoundedCornerShape(2.dp)).background(if (index / 24f <= fraction) foreground else foreground.copy(alpha = .34f)))
+                }
+            }
+            Text(if (downloading || message.delivery == "uploading") "Sending voice message…" else formatVoiceDuration(if (playing) position else duration), color = foreground.copy(alpha = .72f), fontSize = 10.sp)
+        }
     }
+}
+
+private fun formatVoiceDuration(milliseconds: Int): String {
+    val seconds = (milliseconds.coerceAtLeast(0) / 1000)
+    return "%d:%02d".format(Locale.US, seconds / 60, seconds % 60)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2021,6 +2089,21 @@ private fun Avatar(name: String, size: Dp, color: Color, avatarUrl: String? = nu
 }
 
 private fun time(timestamp: Long) = if (timestamp == 0L) "now" else SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+
+private fun sameCalendarDay(first: Long, second: Long): Boolean {
+    val a = Calendar.getInstance().apply { timeInMillis = first }
+    val b = Calendar.getInstance().apply { timeInMillis = second }
+    return a.get(Calendar.ERA) == b.get(Calendar.ERA) && a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+}
+
+private fun dateDividerLabel(timestamp: Long): String {
+    val today = Calendar.getInstance()
+    val value = Calendar.getInstance().apply { timeInMillis = timestamp }
+    if (sameCalendarDay(today.timeInMillis, timestamp)) return "Today"
+    today.add(Calendar.DAY_OF_YEAR, -1)
+    if (sameCalendarDay(today.timeInMillis, timestamp)) return "Yesterday"
+    return SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(value.timeInMillis))
+}
 private fun maskEmail(email: String): String {
     val local = email.substringBefore('@')
     val domain = email.substringAfter('@', "")

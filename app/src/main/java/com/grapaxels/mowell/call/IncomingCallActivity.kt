@@ -32,30 +32,44 @@ class IncomingCallActivity : ComponentActivity() {
         }
         val name = intent.getStringExtra("name").orEmpty().ifBlank { "Mowell user" }
         val video = intent.getBooleanExtra("video", false)
-        val darkMode = getSharedPreferences("mowell_ui", Context.MODE_PRIVATE).getBoolean("dark_mode", false)
-        val backgroundColor = if (darkMode) Color.rgb(15, 15, 16) else Color.WHITE
-        val foreground = if (darkMode) Color.rgb(244, 242, 248) else Color.rgb(20, 19, 24)
-        val muted = if (darkMode) Color.rgb(170, 166, 178) else Color.rgb(114, 112, 120)
+        val backgroundColor = Color.rgb(12, 12, 14)
+        val foreground = Color.WHITE
+        val muted = Color.rgb(184, 182, 192)
         window.statusBarColor = backgroundColor
         window.navigationBarColor = backgroundColor
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(36, 36, 36, 36)
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(28), dp(48), dp(28), dp(34))
             setBackgroundColor(backgroundColor)
         }
+        root.addView(TextView(this).apply { text = "Mowell"; setTextColor(muted); textSize = 15f; gravity = Gravity.CENTER })
+        root.addView(TextView(this).apply { text = name; setTextColor(foreground); textSize = 32f; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD; maxLines = 2 }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        root.addView(TextView(this).apply { text = "incoming ${if (video) "video" else "audio"} call"; setTextColor(muted); textSize = 16f; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 0, 1f))
         root.addView(TextView(this).apply {
-            text = name.take(1).uppercase(); setTextColor(Color.WHITE); textSize = 42f; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
+            text = name.take(1).uppercase(); setTextColor(Color.WHITE); textSize = 48f; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(104, 82, 214)) }
-        }, LinearLayout.LayoutParams(dp(112), dp(112)).apply { bottomMargin = dp(24) })
-        root.addView(TextView(this).apply { text = "Incoming ${if (video) "video" else "voice"} call"; setTextColor(muted); textSize = 16f; gravity = Gravity.CENTER })
-        root.addView(TextView(this).apply { text = name; setTextColor(foreground); textSize = 30f; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD; setPadding(0, dp(8), 0, dp(32)) })
-        fun button(label: String, color: Int, action: () -> Unit) = Button(this).apply {
-            text = label; setTextColor(Color.WHITE); isAllCaps = false; textSize = 16f; typeface = Typeface.DEFAULT_BOLD
-            background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(color) }
-            setOnClickListener { action() }
+        }, LinearLayout.LayoutParams(dp(124), dp(124)))
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 0, 1f))
+        root.addView(Button(this).apply {
+            text = "Message"; setTextColor(Color.WHITE); isAllCaps = false; textSize = 14f
+            background = GradientDrawable().apply { cornerRadius = dp(22).toFloat(); setColor(Color.rgb(47, 47, 52)) }
+            setOnClickListener { replyAndDecline() }
+        }, LinearLayout.LayoutParams(dp(132), dp(46)).apply { bottomMargin = dp(28) })
+        fun callButton(label: String, color: Int, action: () -> Unit) = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+            addView(Button(this@IncomingCallActivity).apply {
+                text = if (label == "Accept") "●" else "—"; setTextColor(Color.WHITE); textSize = 21f
+                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
+                setOnClickListener { isEnabled = false; action() }
+            }, LinearLayout.LayoutParams(dp(72), dp(72)))
+            addView(TextView(this@IncomingCallActivity).apply { text = label; setTextColor(Color.WHITE); textSize = 14f; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
         }
-        root.addView(button("Accept", Color.rgb(67, 160, 71)) { accept() }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 })
-        root.addView(button("Reply and decline", Color.rgb(104, 82, 214)) { replyAndDecline() }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 })
-        root.addView(button("Decline", Color.rgb(211, 47, 47)) { decline(); finish() })
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+            addView(callButton("Decline", Color.rgb(237, 63, 66)) { decline(); finish() }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(callButton("Accept", Color.rgb(52, 199, 89)) { accept() }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        root.addView(actions, LinearLayout.LayoutParams(-1, -2))
         setContentView(root)
     }
 

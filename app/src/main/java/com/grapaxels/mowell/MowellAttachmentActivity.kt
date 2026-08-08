@@ -45,15 +45,15 @@ class MowellAttachmentActivity : ComponentActivity() {
         muted = if (dark) Color.rgb(170, 166, 178) else Color.rgb(114, 114, 114)
         window.statusBarColor = surface; window.navigationBarColor = surface
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(surface) }
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 18, 18, 12) }
-        header.addView(Button(this).apply { text = "‹"; setOnClickListener { finish() } }, LinearLayout.LayoutParams(72, 64))
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(8), dp(16), dp(8)) }
+        header.addView(TextView(this).apply { text = "←"; textSize = 30f; gravity = Gravity.CENTER; setTextColor(ink); setOnClickListener { finish() } }, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(TextView(this).apply {
             text = intent.getStringExtra(EXTRA_NAME) ?: "Mowell viewer"
             textSize = 19f; setTextColor(ink); setTypeface(typeface, android.graphics.Typeface.BOLD)
             maxLines = 2
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(header)
-        content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(18, 12, 18, 24) }
+        content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(12), dp(8), dp(12), dp(16)) }
         root.addView(content, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
@@ -98,9 +98,21 @@ class MowellAttachmentActivity : ComponentActivity() {
 
     private fun showFile(file: File, mime: String, name: String) {
         when {
-            mime.startsWith("image/") -> content.addView(ImageView(this).apply {
-                setImageBitmap(BitmapFactory.decodeFile(file.absolutePath)); adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER
-            }, LinearLayout.LayoutParams(-1, -1))
+            mime.startsWith("image/") || name.matches(Regex("(?i).+\\.(jpg|jpeg|png|webp|gif)$")) -> {
+                val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+                if (bitmap == null) return showError("This photo could not be decoded")
+                content.setPadding(0, 0, 0, 0)
+                content.setBackgroundColor(Color.BLACK)
+                window.navigationBarColor = Color.BLACK
+                content.addView(ImageView(this).apply {
+                    setImageBitmap(bitmap)
+                    setBackgroundColor(Color.BLACK)
+                    adjustViewBounds = false
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    contentDescription = name
+                    setOnClickListener { scaleType = if (scaleType == ImageView.ScaleType.FIT_CENTER) ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER }
+                }, LinearLayout.LayoutParams(-1, -1))
+            }
             mime.startsWith("video/") || mime.startsWith("audio/") -> content.addView(VideoView(this).apply {
                 val controller = MediaController(this@MowellAttachmentActivity); setMediaController(controller); controller.setAnchorView(this)
                 setVideoURI(Uri.fromFile(file)); setOnPreparedListener { if (mime.startsWith("audio/")) it.start() }; requestFocus()
@@ -162,6 +174,8 @@ class MowellAttachmentActivity : ComponentActivity() {
     private fun showError(message: String) {
         content.removeAllViews(); content.addView(TextView(this).apply { text = message; textSize = 17f; gravity = Gravity.CENTER; setTextColor(muted) }, LinearLayout.LayoutParams(-1, -1))
     }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() { pdf?.close(); pdfFile?.close(); super.onDestroy() }
 

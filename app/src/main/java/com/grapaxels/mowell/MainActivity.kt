@@ -174,6 +174,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val typingUsers: StateFlow<Map<String, List<String>>> = _typingUsers.asStateFlow()
     private val _voiceRecording = MutableStateFlow(false)
     val voiceRecording: StateFlow<Boolean> = _voiceRecording.asStateFlow()
+    private val _actionBusy = MutableStateFlow(false)
+    val actionBusy: StateFlow<Boolean> = _actionBusy.asStateFlow()
     private val typingJobs = ConcurrentHashMap<String, Job>()
     private val syncCursors = ConcurrentHashMap<String, Long>()
     private val syncing = ConcurrentHashMap.newKeySet<String>()
@@ -222,6 +224,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             dao.markRead(conversationId)
             notifier.clearConversation(conversationId)
+            if (!conversationId.startsWith("user:") && conversationId != "general") {
+                auth.markConversationRead(conversationId)
+            }
         }
     }
 
@@ -338,7 +343,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                 val isNew = !dao.hasMessage(item.id)
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
-                    item.body, item.sentAt, item.outgoing, Route.INTERNET.name, "sent", item.kind,
+                    item.body, item.sentAt, item.outgoing, Route.INTERNET.name, item.delivery, item.kind,
                     item.attachmentId, item.attachmentMime, item.attachmentName, item.editedAt,
                     item.replyToId, item.threadRootId, item.reactions, item.metadata
                 )
@@ -357,7 +362,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             }
             remote.maxOfOrNull { it.syncAt }?.let { syncCursors[conversationId] = maxOf(syncCursors[conversationId] ?: 0L, it) }
             remote.lastOrNull()?.let { last ->
-                val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, "sent", last.kind, last.attachmentId, last.attachmentMime, last.attachmentName, last.editedAt, last.replyToId, last.threadRootId, last.reactions, last.metadata)
+                val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, last.delivery, last.kind, last.attachmentId, last.attachmentMime, last.attachmentName, last.editedAt, last.replyToId, last.threadRootId, last.reactions, last.metadata)
                 val current = dao.getConversation(conversationId)
                 dao.upsertConversation(current?.copy(subtitle = preview(message), updatedAt = last.sentAt) ?: ConversationEntity(conversationId, title, preview(message), false, last.sentAt))
             }
@@ -490,11 +495,33 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         voiceRecordingFile = null
         _voiceRecording.value = false
         if (completed && send && file != null && file.length() > 0) {
-            val uri = FileProvider.getUriForFile(getApplication(), "${getApplication<Application>().packageName}.files", file)
-            uploadAttachment(conversationId, uri)
+            uploadVoiceRecording(conversationId, file)
         } else if (file != null) {
             file.delete()
             if (send) _authError.value = "Voice recording was too short"
+        }
+    }
+
+    private fun uploadVoiceRecording(conversationId: String, file: File) {
+        viewModelScope.launch {
+            val bytes = runCatching { file.readBytes() }.getOrNull()
+            if (bytes == null || bytes.isEmpty()) {
+                _authError.value = "Voice recording could not be saved"
+                file.delete()
+                return@launch
+            }
+            val id = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            val name = file.name
+            dao.insertMessage(MessageEntity(id, conversationId, "You", "Voice message", now, true, Route.INTERNET.name, "uploading", "audio", null, "audio/mp4", name))
+            auth.uploadAttachment(conversationId, id, name, "audio/mp4", bytes).onSuccess { item ->
+                dao.insertMessage(MessageEntity(item.id, conversationId, "You", "Voice message", item.sentAt, true, Route.INTERNET.name, item.delivery, "audio", item.attachmentId, item.attachmentMime, item.attachmentName))
+                conversations.value.find { it.id == conversationId }?.let { dao.upsertConversation(it.copy(subtitle = "Voice message", updatedAt = item.sentAt)) }
+            }.onFailure {
+                dao.updateDelivery(id, it.message ?: "upload failed", Route.LOCAL_ONLY.name)
+                _authError.value = it.message ?: "Voice recording could not be sent"
+            }
+            file.delete()
         }
     }
 
@@ -661,7 +688,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun sendConnectionRequest(user: UserProfile) {
-        viewModelScope.launch {
+        runAction {
             auth.sendConnectionRequest(user.id).onSuccess {
                 _authError.value = "Connection request sent to @${user.username}"
                 refreshSocial()
@@ -670,7 +697,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun respondConnectionRequest(requestId: String, accept: Boolean) {
-        viewModelScope.launch {
+        runAction {
             auth.respondConnectionRequest(requestId, accept).onSuccess {
                 refreshSocial()
                 if (accept) syncAllConversations()
@@ -679,7 +706,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun respondGroupInvitation(invitationId: String, accept: Boolean) {
-        viewModelScope.launch {
+        runAction {
             auth.respondGroupInvitation(invitationId, accept).onSuccess {
                 refreshSocial()
                 if (accept) syncAllConversations()
@@ -688,7 +715,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>, groupType: String = "private", groupPassword: String = "", onReady: (String) -> Unit) {
-        viewModelScope.launch {
+        runAction {
             auth.createGroup(title, memberIds, inviteIds, groupType, groupPassword).onSuccess { conversationId ->
                 dao.upsertConversation(ConversationEntity(conversationId, title.trim(), "Group created", true, System.currentTimeMillis()))
                 syncAllConversations()
@@ -698,7 +725,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun addGroupMembers(conversationId: String, memberIds: Set<String>, inviteIds: Set<String>, onDone: () -> Unit) {
-        viewModelScope.launch {
+        runAction {
             auth.addGroupMembers(conversationId, memberIds, inviteIds).onSuccess {
                 syncAllConversations(); refreshGroupMembers(conversationId); onDone()
             }.onFailure { _authError.value = it.message ?: "Could not add group members" }
@@ -714,21 +741,21 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setGroupAdmin(conversationId: String, userId: String, admin: Boolean) {
-        viewModelScope.launch {
+        runAction {
             auth.setGroupAdmin(conversationId, userId, admin).onSuccess { refreshGroupMembers(conversationId) }
                 .onFailure { _authError.value = it.message ?: "Could not change admin role" }
         }
     }
 
     fun removeGroupMember(conversationId: String, userId: String) {
-        viewModelScope.launch {
+        runAction {
             auth.removeGroupMember(conversationId, userId).onSuccess { refreshGroupMembers(conversationId); syncAllConversations() }
                 .onFailure { _authError.value = it.message ?: "Could not remove group member" }
         }
     }
 
     fun setGroupMemberBanned(conversationId: String, userId: String, banned: Boolean) {
-        viewModelScope.launch {
+        runAction {
             auth.setGroupMemberBanned(conversationId, userId, banned).onSuccess {
                 refreshGroupMembers(conversationId); syncAllConversations()
             }.onFailure { _authError.value = it.message ?: "Could not update banned member" }
@@ -743,7 +770,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun leaveGroup(conversationId: String, onDone: () -> Unit) {
-        viewModelScope.launch {
+        runAction {
             auth.leaveGroup(conversationId).onSuccess {
                 dao.deleteConversation(conversationId)
                 _groupMemberStates.value = _groupMemberStates.value - conversationId
@@ -754,7 +781,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteGroup(conversationId: String, onDone: () -> Unit) {
-        viewModelScope.launch {
+        runAction {
             auth.deleteGroup(conversationId).onSuccess {
                 dao.deleteConversation(conversationId)
                 _groupMemberStates.value = _groupMemberStates.value - conversationId
@@ -765,9 +792,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun startChat(user: UserProfile, onReady: (String) -> Unit) {
-        viewModelScope.launch {
+        runAction {
             val existing = conversations.value.find { it.username.equals(user.username, ignoreCase = true) }
-            if (existing != null) { onReady(existing.id); return@launch }
+            if (existing != null) { onReady(existing.id); return@runAction }
             auth.sendConnectionRequest(user.id).onSuccess { refreshSocial() }
                 .onFailure { _authError.value = it.message ?: "Could not send connection request" }
         }
@@ -779,7 +806,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setUserBlocked(conversationId: String, blocked: Boolean) {
-        viewModelScope.launch {
+        runAction {
             auth.setBlocked(conversationId, blocked).onSuccess { state ->
                 conversations.value.find { it.id == conversationId }?.let { dao.upsertConversation(it.copy(blocked = state.first, blockedByMe = state.second)) }
                 if (blocked) {
@@ -787,6 +814,14 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                     notifier.clearConversation(conversationId)
                 }
             }.onFailure { _authError.value = it.message ?: "Could not update blocked user" }
+        }
+    }
+
+    private fun runAction(block: suspend () -> Unit) {
+        if (_actionBusy.value) return
+        viewModelScope.launch {
+            _actionBusy.value = true
+            try { block() } finally { _actionBusy.value = false }
         }
     }
 

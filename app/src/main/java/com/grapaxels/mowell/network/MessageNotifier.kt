@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import com.grapaxels.mowell.MainActivity
 import com.grapaxels.mowell.R
 import com.grapaxels.mowell.call.IncomingCallActivity
+import com.grapaxels.mowell.call.MowellCallActivity
 import com.grapaxels.mowell.data.MessageEntity
 import org.json.JSONObject
 
@@ -76,7 +77,14 @@ class MessageNotifier(private val context: Context) {
                     putExtra("avatar", avatarUrl)
                     putExtra("notification_id", notificationId)
                 }
-                val acceptPending = PendingIntent.getActivity(context, notificationId, incoming, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                val fullScreenPending = PendingIntent.getActivity(context, notificationId, incoming, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                val acceptCall = Intent(context, MowellCallActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("conversation", message.conversationId); putExtra("name", conversationTitle)
+                    putExtra("room", room); putExtra("video", video); putExtra("group", group); putExtra("initiator", false)
+                    putExtra("avatar", avatarUrl); putExtra("notification_id", notificationId)
+                }
+                val acceptPending = PendingIntent.getActivity(context, notificationId + 3, acceptCall, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 val decline = Intent(context, NotificationActionReceiver::class.java).apply {
                     action = NotificationActionReceiver.ACTION_DECLINE
                     putExtra(NotificationActionReceiver.EXTRA_ROOM, room)
@@ -94,7 +102,7 @@ class MessageNotifier(private val context: Context) {
                 val remoteInput = RemoteInput.Builder(NotificationActionReceiver.KEY_REPLY).setLabel("Reply to $conversationTitle").build()
                 builder.addAction(0, "Decline", declinePending)
                     .addAction(NotificationCompat.Action.Builder(0, "Reply & decline", replyPending).addRemoteInput(remoteInput).build())
-                    .addAction(0, "Accept", acceptPending).setFullScreenIntent(acceptPending, true).setOngoing(true).setTimeoutAfter(45_000)
+                    .addAction(0, "Accept", acceptPending).setFullScreenIntent(fullScreenPending, true).setOngoing(true).setTimeoutAfter(45_000)
             }
         } else if (message.kind != "call_end") {
             val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
