@@ -12,7 +12,14 @@ data class MessageEntity(
     val kind: String = "text",
     val attachmentId: String? = null,
     val attachmentMime: String? = null,
-    val attachmentName: String? = null
+    val attachmentName: String? = null,
+    val editedAt: Long = 0L,
+    val replyToId: String? = null,
+    val threadRootId: String? = null,
+    /** JSON object containing emoji -> count for compact offline rendering. */
+    val reactions: String = "{}",
+    /** Type-specific JSON for polls, links, stickers and collaborative items. */
+    val metadata: String = "{}"
 )
 
 data class ConversationEntity(

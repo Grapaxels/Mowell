@@ -32,15 +32,24 @@ class MowellAttachmentActivity : ComponentActivity() {
     private var pdf: PdfRenderer? = null
     private var pdfFile: ParcelFileDescriptor? = null
     private var pageIndex = 0
+    private var surface = Color.WHITE
+    private var ink = Color.rgb(20, 20, 20)
+    private var muted = Color.rgb(114, 114, 114)
+    private val primary = Color.rgb(104, 82, 214)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(247, 245, 240)) }
+        val dark = getSharedPreferences("mowell_ui", MODE_PRIVATE).getBoolean("dark_mode", false)
+        surface = if (dark) Color.rgb(15, 15, 16) else Color.WHITE
+        ink = if (dark) Color.rgb(244, 242, 248) else Color.rgb(20, 20, 20)
+        muted = if (dark) Color.rgb(170, 166, 178) else Color.rgb(114, 114, 114)
+        window.statusBarColor = surface; window.navigationBarColor = surface
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(surface) }
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 18, 18, 12) }
         header.addView(Button(this).apply { text = "‹"; setOnClickListener { finish() } }, LinearLayout.LayoutParams(72, 64))
         header.addView(TextView(this).apply {
             text = intent.getStringExtra(EXTRA_NAME) ?: "Mowell viewer"
-            textSize = 19f; setTextColor(Color.rgb(21, 19, 26)); setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textSize = 19f; setTextColor(ink); setTypeface(typeface, android.graphics.Typeface.BOLD)
             maxLines = 2
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(header)
@@ -55,9 +64,9 @@ class MowellAttachmentActivity : ComponentActivity() {
     private fun showContact() {
         val name = intent.getStringExtra(EXTRA_NAME).orEmpty().ifBlank { "Contact" }
         val phone = intent.getStringExtra(EXTRA_PHONE).orEmpty()
-        content.addView(TextView(this).apply { text = name.take(1).uppercase(); textSize = 48f; gravity = Gravity.CENTER; setTextColor(Color.rgb(115, 87, 246)) }, LinearLayout.LayoutParams(-1, 150))
-        content.addView(TextView(this).apply { text = name; textSize = 26f; gravity = Gravity.CENTER; setTextColor(Color.rgb(21, 19, 26)) })
-        content.addView(TextView(this).apply { text = phone.ifBlank { "No phone number shared" }; textSize = 18f; gravity = Gravity.CENTER; setPadding(0, 18, 0, 18); setTextColor(Color.DKGRAY) })
+        content.addView(TextView(this).apply { text = name.take(1).uppercase(); textSize = 48f; gravity = Gravity.CENTER; setTextColor(primary) }, LinearLayout.LayoutParams(-1, 150))
+        content.addView(TextView(this).apply { text = name; textSize = 26f; gravity = Gravity.CENTER; setTextColor(ink) })
+        content.addView(TextView(this).apply { text = phone.ifBlank { "No phone number shared" }; textSize = 18f; gravity = Gravity.CENTER; setPadding(0, 18, 0, 18); setTextColor(muted) })
         content.addView(Button(this).apply {
             text = "Copy phone number"; isEnabled = phone.isNotBlank()
             setOnClickListener {
@@ -130,7 +139,7 @@ class MowellAttachmentActivity : ComponentActivity() {
     private fun showText(value: String) {
         content.gravity = Gravity.TOP
         content.addView(ScrollView(this).apply { addView(TextView(this@MowellAttachmentActivity).apply {
-            text = value.ifBlank { "No readable text was found in this document." }; textSize = 16f; setTextColor(Color.rgb(21, 19, 26)); setTextIsSelectable(true); setPadding(12, 12, 12, 36)
+            text = value.ifBlank { "No readable text was found in this document." }; textSize = 16f; setTextColor(ink); setTextIsSelectable(true); setPadding(12, 12, 12, 36)
         }) }, LinearLayout.LayoutParams(-1, -1))
     }
 
@@ -151,7 +160,7 @@ class MowellAttachmentActivity : ComponentActivity() {
     }.getOrElse { "This document could not be previewed.\n\n${it.message.orEmpty()}" }
 
     private fun showError(message: String) {
-        content.removeAllViews(); content.addView(TextView(this).apply { text = message; textSize = 17f; gravity = Gravity.CENTER; setTextColor(Color.DKGRAY) }, LinearLayout.LayoutParams(-1, -1))
+        content.removeAllViews(); content.addView(TextView(this).apply { text = message; textSize = 17f; gravity = Gravity.CENTER; setTextColor(muted) }, LinearLayout.LayoutParams(-1, -1))
     }
 
     override fun onDestroy() { pdf?.close(); pdfFile?.close(); super.onDestroy() }

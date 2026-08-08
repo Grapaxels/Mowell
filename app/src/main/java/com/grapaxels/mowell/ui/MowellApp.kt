@@ -3,6 +3,7 @@ package com.grapaxels.mowell.ui
 import android.app.Activity
 import android.content.Intent
 import android.media.RingtoneManager
+import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.Settings
 import android.webkit.PermissionRequest
@@ -65,16 +66,33 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.ContactPhone
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Brush
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.EmojiEmotions
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.InsertDriveFile
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PersonAdd
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Poll
+import androidx.compose.material.icons.rounded.Reply
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.SmartToy
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -92,6 +110,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.NavigationBar
@@ -128,11 +148,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -194,7 +216,7 @@ private val ClayWhite: Color
 private fun ConversationEntity.displayTitle(): String =
     if (!isGroup && !localTitle.isNullOrBlank()) localTitle else title
 
-private enum class Page { CHATS, PEOPLE, CALLS, NEARBY, YOU }
+private enum class Page { CHATS, CALLS, USERS, GROUPS }
 
 @Composable
 fun MowellApp(vm: MowellViewModel) {
@@ -396,8 +418,14 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
     var profile by remember { mutableStateOf<ConversationEntity?>(null) }
     var addMenu by remember { mutableStateOf(false) }
     var createGroup by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var nearbyOpen by remember { mutableStateOf(false) }
+    var callInfo by remember { mutableStateOf<ConversationEntity?>(null) }
     BackHandler {
         when {
+            settingsOpen -> settingsOpen = false
+            nearbyOpen -> nearbyOpen = false
+            callInfo != null -> callInfo = null
             profile != null -> profile = null
             openChat != null -> openChat = null
             page != Page.CHATS -> page = Page.CHATS
@@ -406,25 +434,27 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
     }
     if (createGroup) CreateGroupDialog(vm, { createGroup = false }) { conversationId -> createGroup = false; openChat = conversationId }
     when {
+        settingsOpen -> SettingsScreen(vm, Modifier.fillMaxSize(), darkMode, onThemeChanged)
+        nearbyOpen -> Scaffold(containerColor = Canvas, topBar = { CometBackHeader("Nearby", { nearbyOpen = false }) }) { padding -> NearbyScreen(vm, Modifier.padding(padding)) }
+        callInfo != null -> CallInfoScreen(vm, callInfo!!, { callInfo = null }) { vm.launchCall(context, it) }
         profile != null -> ProfileScreen(vm, profile!!, { profile = null })
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
         else -> Scaffold(
             containerColor = Canvas,
-            topBar = { ClayHeader(vm, page, darkMode, onThemeChanged) },
+            topBar = { ClayHeader(vm, page, darkMode, onThemeChanged, { nearbyOpen = true }, { settingsOpen = true }) },
             bottomBar = {
                 NavigationBar(containerColor = Canvas, tonalElevation = 0.dp, modifier = Modifier.height(68.dp)) {
                     Nav(Page.CHATS, page, "Chats", Icons.Rounded.ChatBubble) { page = it }
-                    Nav(Page.PEOPLE, page, "People", Icons.Rounded.Search) { page = it }
                     Nav(Page.CALLS, page, "Calls", Icons.Rounded.Call) { page = it }
-                    Nav(Page.NEARBY, page, "Nearby", Icons.Rounded.Bluetooth) { page = it }
-                    Nav(Page.YOU, page, "You", Icons.Rounded.Person) { page = it }
+                    Nav(Page.USERS, page, "Users", Icons.Rounded.Person) { page = it }
+                    Nav(Page.GROUPS, page, "Groups", Icons.Rounded.Groups) { page = it }
                 }
             },
             floatingActionButton = {
                 if (page == Page.CHATS) Box {
                     FloatingActionButton(onClick = { addMenu = true }, containerColor = Violet, contentColor = Color.White, shape = CircleShape) { Icon(Icons.Rounded.Add, "New") }
                     DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-                        DropdownMenuItem(text = { Text("Connect people") }, leadingIcon = { Icon(Icons.Rounded.Search, null) }, onClick = { addMenu = false; page = Page.PEOPLE })
+                        DropdownMenuItem(text = { Text("Connect people") }, leadingIcon = { Icon(Icons.Rounded.Search, null) }, onClick = { addMenu = false; page = Page.USERS })
                         DropdownMenuItem(text = { Text("Create group") }, leadingIcon = { Icon(Icons.Rounded.Groups, null) }, onClick = { addMenu = false; createGroup = true; vm.refreshSocial() })
                     }
                 }
@@ -432,29 +462,29 @@ private fun MainExperience(vm: MowellViewModel, darkMode: Boolean, onThemeChange
         ) { padding ->
             when (page) {
                 Page.CHATS -> ChatsScreen(vm, Modifier.padding(padding)) { openChat = it }
-                Page.PEOPLE -> PeopleScreen(vm, Modifier.padding(padding)) { user -> vm.startChat(user) { conversationId -> openChat = conversationId } }
-                Page.CALLS -> CallsScreen(vm, Modifier.padding(padding)) { vm.launchCall(context, it) }
-                Page.NEARBY -> NearbyScreen(vm, Modifier.padding(padding))
-                Page.YOU -> SettingsScreen(vm, Modifier.padding(padding), darkMode, onThemeChanged)
+                Page.CALLS -> CallsScreen(vm, Modifier.padding(padding), { callInfo = it }) { vm.launchCall(context, it) }
+                Page.USERS -> PeopleScreen(vm, Modifier.padding(padding)) { user -> vm.startChat(user) { conversationId -> openChat = conversationId } }
+                Page.GROUPS -> GroupsScreen(vm, Modifier.padding(padding), { createGroup = true; vm.refreshSocial() }) { openChat = it }
             }
         }
     }
 }
 
 @Composable
-private fun ClayHeader(vm: MowellViewModel, page: Page, darkMode: Boolean, onThemeChanged: (Boolean) -> Unit) {
+private fun ClayHeader(vm: MowellViewModel, page: Page, darkMode: Boolean, onThemeChanged: (Boolean) -> Unit, openNearby: () -> Unit, openSettings: () -> Unit) {
     val session by vm.session.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxWidth().background(Canvas)) {
         Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                when (page) { Page.CHATS -> "Chats"; Page.PEOPLE -> "People"; Page.CALLS -> "Calls"; Page.NEARBY -> "Nearby"; Page.YOU -> "You" },
+                when (page) { Page.CHATS -> "Chats"; Page.CALLS -> "Calls"; Page.USERS -> "Users"; Page.GROUPS -> "Groups" },
                 modifier = Modifier.weight(1f), fontSize = 24.sp, fontWeight = FontWeight.Bold
             )
             IconButton(onClick = { onThemeChanged(!darkMode) }) {
                 Icon(if (darkMode) Icons.Rounded.LightMode else Icons.Rounded.DarkMode, if (darkMode) "Use light theme" else "Use dark theme", tint = Ink)
             }
+            IconButton(onClick = openNearby) { Icon(Icons.Rounded.Bluetooth, "Nearby", tint = Ink) }
             Spacer(Modifier.width(2.dp))
-            Avatar(session?.user?.displayName ?: "M", 40.dp, Violet, session?.user?.avatarUrl)
+            Box(Modifier.clickable(onClick = openSettings)) { Avatar(session?.user?.displayName ?: "M", 40.dp, Violet, session?.user?.avatarUrl) }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
     }
@@ -463,6 +493,18 @@ private fun ClayHeader(vm: MowellViewModel, page: Page, darkMode: Boolean, onThe
 @Composable
 private fun RowScope.Nav(target: Page, selected: Page, label: String, icon: ImageVector, onSelect: (Page) -> Unit) {
     NavigationBarItem(selected = target == selected, onClick = { onSelect(target) }, icon = { Icon(icon, label, Modifier.size(22.dp)) }, label = { Text(label, fontSize = 10.sp, fontWeight = if (target == selected) FontWeight.SemiBold else FontWeight.Normal) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Violet, selectedTextColor = Violet, unselectedIconColor = Muted, unselectedTextColor = Muted, indicatorColor = Color.Transparent))
+}
+
+@Composable
+private fun CometBackHeader(title: String, back: () -> Unit, action: (@Composable () -> Unit)? = null) {
+    Column(Modifier.fillMaxWidth().background(Canvas)) {
+        Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }
+            Text(title, Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            action?.invoke()
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+    }
 }
 
 @Composable
@@ -627,13 +669,20 @@ private fun CreateGroupDialog(vm: MowellViewModel, dismiss: () -> Unit, created:
     var inviteQuery by remember { mutableStateOf("") }
     var members by remember { mutableStateOf(setOf<String>()) }
     var invites by remember { mutableStateOf(setOf<String>()) }
+    var groupType by remember { mutableStateOf("private") }
+    var groupPassword by remember { mutableStateOf("") }
     val connectionIds = connections.map { it.id }.toSet()
     AlertDialog(
         onDismissRequest = dismiss,
         title = { Text("Create group", fontWeight = FontWeight.Black) },
         text = {
             Column {
+                Text("Type", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(listOf("public", "private", "password")) { type -> FilterChip(selected = groupType == type, onClick = { groupType = type }, label = { Text(type.replaceFirstChar { it.uppercase() }) }) }
+                }
                 OutlinedTextField(title, { title = it.take(80) }, label = { Text("Group name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (groupType == "password") OutlinedTextField(groupPassword, { groupPassword = it.take(80) }, label = { Text("Group password") }, singleLine = true, modifier = Modifier.fillMaxWidth(), visualTransformation = PasswordVisualTransformation())
                 Spacer(Modifier.height(8.dp)); Text("Add connected people", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 170.dp)) {
                     items(connections, key = { "group-member-${it.id}" }) { user ->
@@ -656,7 +705,7 @@ private fun CreateGroupDialog(vm: MowellViewModel, dismiss: () -> Unit, created:
                 }
             }
         },
-        confirmButton = { Button(enabled = title.trim().isNotEmpty() && (members.isNotEmpty() || invites.isNotEmpty()), onClick = { vm.createGroup(title, members, invites, created) }) { Text("Create") } },
+        confirmButton = { Button(enabled = title.trim().isNotEmpty() && (members.isNotEmpty() || invites.isNotEmpty()) && (groupType != "password" || groupPassword.length >= 4), onClick = { vm.createGroup(title, members, invites, groupType, groupPassword, created) }) { Text("Create") } },
         dismissButton = { OutlinedButton(onClick = dismiss) { Text("Cancel") } }
     )
 }
@@ -758,21 +807,55 @@ private fun PeopleScreen(vm: MowellViewModel, modifier: Modifier, onUser: (UserP
 }
 
 @Composable
-private fun CallsScreen(vm: MowellViewModel, modifier: Modifier, onCall: (CallSession) -> Unit) {
+private fun GroupsScreen(vm: MowellViewModel, modifier: Modifier, createGroup: () -> Unit, open: (String) -> Unit) {
+    val conversations by vm.conversations.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
+    val groups = conversations.filter { it.isGroup && it.id != "general" && it.displayTitle().contains(query, true) }
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 12.dp)) {
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search") },
+                leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                singleLine = true,
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
+            )
+        }
+        item {
+            Row(Modifier.fillMaxWidth().clickable(onClick = createGroup).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(48.dp).clip(CircleShape).background(Violet), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.PersonAdd, null, tint = Color.White) }
+                Spacer(Modifier.width(12.dp)); Text("Create a group", Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Icon(Icons.Rounded.ChevronRight, null, tint = Muted)
+            }
+        }
+        items(groups, key = { "group-${it.id}" }) { group ->
+            Row(Modifier.fillMaxWidth().clickable { open(group.id) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(group.displayTitle(), 48.dp, Violet, group.avatarUrl); Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) { Text(group.displayTitle(), fontWeight = FontWeight.SemiBold, fontSize = 16.sp); Text(group.members.ifBlank { "Mowell group" }, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
+        }
+        if (groups.isEmpty()) item { EmptyState(Icons.Rounded.Groups, "No Groups Yet", "Create a group and invite people to start a shared conversation.") }
+    }
+}
+
+@Composable
+private fun CallsScreen(vm: MowellViewModel, modifier: Modifier, onInfo: (ConversationEntity) -> Unit, onCall: (CallSession) -> Unit) {
     val conversations by vm.conversations.collectAsStateWithLifecycle()
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         item { Text("Recent", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
-        items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation -> CallHistoryCard(vm, conversation, onCall) }
+        items(conversations.filterNot { it.id == "general" }, key = { it.id }) { conversation -> CallHistoryCard(vm, conversation, { onInfo(conversation) }, onCall) }
         if (conversations.none { it.id != "general" }) item { EmptyState(Icons.Rounded.Call, "No Calls Yet", "Your voice and video call history will appear here.") }
     }
 }
 
 @Composable
-private fun CallHistoryCard(vm: MowellViewModel, conversation: ConversationEntity, onCall: (CallSession) -> Unit) {
+private fun CallHistoryCard(vm: MowellViewModel, conversation: ConversationEntity, onInfo: () -> Unit, onCall: (CallSession) -> Unit) {
     val messages by vm.messages(conversation.id).collectAsStateWithLifecycle(initialValue = emptyList())
     val lastEnded = messages.lastOrNull { it.kind == "call_end" }
     val history = lastEnded?.let { callEndText(it.body) } ?: if (conversation.isGroup) "Group call" else "Direct call"
-    ClayCard(Canvas, Modifier.padding(horizontal = 16.dp)) {
+    ClayCard(Canvas, Modifier.padding(horizontal = 16.dp).clickable(onClick = onInfo)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(conversation.displayTitle(), 52.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl); Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -796,6 +879,47 @@ private fun callEndText(body: String): String {
     val minutes = seconds / 60
     val remainder = seconds % 60
     return "Call ended · ${if (minutes > 0) "${minutes}m " else ""}${remainder}s"
+}
+
+@Composable
+private fun CallInfoScreen(vm: MowellViewModel, conversation: ConversationEntity, back: () -> Unit, onCall: (CallSession) -> Unit) {
+    val messages by vm.messages(conversation.id).collectAsStateWithLifecycle(initialValue = emptyList())
+    val groupStates by vm.groupMemberStates.collectAsStateWithLifecycle()
+    var tab by remember { mutableStateOf("Participants") }
+    LaunchedEffect(conversation.id) { if (conversation.isGroup) vm.refreshGroupMembers(conversation.id) }
+    Scaffold(containerColor = Canvas, topBar = { CometBackHeader("Call Info", back) }) { padding ->
+        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(bottom = 20.dp)) {
+            item {
+                Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Avatar(conversation.displayTitle(), 84.dp, Violet, conversation.avatarUrl); Spacer(Modifier.height(10.dp)); Text(conversation.displayTitle(), fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(28.dp), modifier = Modifier.padding(top = 12.dp)) {
+                        IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.displayTitle(), false)) }, Modifier.clip(CircleShape).background(Violet)) { Icon(Icons.Rounded.Call, "Voice", tint = Color.White) }
+                        IconButton(onClick = { onCall(vm.createCall(conversation.id, conversation.displayTitle(), true)) }, Modifier.clip(CircleShape).background(Violet)) { Icon(Icons.Rounded.Videocam, "Video", tint = Color.White) }
+                    }
+                }
+            }
+            item {
+                LazyRow(Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("Participants", "Recording", "History")) { label -> FilterChip(selected = tab == label, onClick = { tab = label }, label = { Text(label) }) }
+                }
+                HorizontalDivider(Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.outline)
+            }
+            when (tab) {
+                "Participants" -> {
+                    val members = groupStates[conversation.id]?.members.orEmpty()
+                    if (conversation.isGroup && members.isNotEmpty()) items(members, key = { "call-participant-${it.user.id}" }) { member ->
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) { Avatar(member.user.displayName, 44.dp, Violet, member.user.avatarUrl); Spacer(Modifier.width(12.dp)); Column { Text(member.user.displayName, fontWeight = FontWeight.SemiBold); Text(if (member.isAdmin) "Admin" else "Member", color = Muted, fontSize = 11.sp) } }
+                    } else item { Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Avatar(conversation.displayTitle(), 44.dp, Violet, conversation.avatarUrl); Spacer(Modifier.width(12.dp)); Text(conversation.displayTitle(), fontWeight = FontWeight.SemiBold) } }
+                }
+                "Recording" -> item { EmptyState(Icons.Rounded.Mic, "No Recordings", "Call recordings appear here only when every participant has consented.") }
+                else -> {
+                    val history = messages.filter { it.kind == "call_end" }.reversed()
+                    items(history, key = { "call-history-${it.id}" }) { item -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) { Icon(Icons.Rounded.Call, null, tint = Violet); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(callEndText(item.body), fontWeight = FontWeight.SemiBold); Text(SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault()).format(Date(item.sentAt)), color = Muted, fontSize = 11.sp) } } }
+                    if (history.isEmpty()) item { EmptyState(Icons.Rounded.Call, "No Call History", "Completed calls will appear here.") }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -985,10 +1109,22 @@ private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity,
                                 if (!member.isAdmin) Text("Make admin", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { vm.setGroupAdmin(conversation.id, member.user.id, true) }.padding(4.dp))
                                 else if (viewerIsCreator) Text("Remove admin", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { vm.setGroupAdmin(conversation.id, member.user.id, false) }.padding(4.dp))
                                 if (!member.isAdmin || viewerIsCreator) Text("Remove", color = Color(0xFFB3261E), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { removeMember = member.user.id to member.user.displayName }.padding(4.dp))
+                                if (!member.isAdmin || viewerIsCreator) Text("Ban", color = Color(0xFFB3261E), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { vm.setGroupMemberBanned(conversation.id, member.user.id, true) }.padding(4.dp))
                             }
                         }
                     }
                     if (groupState == null) Text(conversation.members.ifBlank { "Loading members…" }, color = Muted)
+                }
+            }
+            if (conversation.isGroup && groupState?.bannedMembers?.isNotEmpty() == true) item {
+                ClayCard(ClayWhite) {
+                    Text("Banned members", fontWeight = FontWeight.Bold, color = Violet)
+                    groupState.bannedMembers.forEach { user ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Avatar(user.displayName, 38.dp, Ink, user.avatarUrl); Spacer(Modifier.width(9.dp)); Text(user.displayName, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                            Text("Unban", color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.clickable { vm.setGroupMemberBanned(conversation.id, user.id, false) }.padding(8.dp))
+                        }
+                    }
                 }
             }
             if (conversation.isGroup && groupState?.viewerIsAdmin == true) item {
@@ -1024,6 +1160,7 @@ private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity,
 private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> Unit, call: (CallSession) -> Unit, profile: (ConversationEntity) -> Unit) {
     val messages by vm.messages(conversationId).collectAsStateWithLifecycle(initialValue = emptyList())
     val conversation = vm.conversations.collectAsStateWithLifecycle().value.find { it.id == conversationId }
+    val groupStates by vm.groupMemberStates.collectAsStateWithLifecycle()
     val typingState by vm.typingUsers.collectAsStateWithLifecycle()
     val voiceRecording by vm.voiceRecording.collectAsStateWithLifecycle()
     val typing = typingState[conversationId].orEmpty()
@@ -1038,6 +1175,15 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     var newCode by remember { mutableStateOf("") }
     var replyTo by remember { mutableStateOf<MessageEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var actionTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var infoTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var reactionTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var editTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var editText by remember { mutableStateOf("") }
+    var translateTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var threadRoot by remember { mutableStateOf<MessageEntity?>(null) }
+    var aiOpen by remember { mutableStateOf(false) }
+    var extrasOpen by remember { mutableStateOf(false) }
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     var searchOpen by remember { mutableStateOf(false) }
     var chatQuery by remember { mutableStateOf("") }
@@ -1051,7 +1197,8 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     val cameraPicker = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
         if (captured) cameraUri?.let { vm.uploadAttachment(conversationId, it) }
     }
-    val displayedMessages = if (chatQuery.isBlank()) messages else messages.filter { message ->
+    val timelineMessages = messages.filter { it.threadRootId.isNullOrBlank() }
+    val displayedMessages = if (chatQuery.isBlank()) timelineMessages else timelineMessages.filter { message ->
         message.body.contains(chatQuery, ignoreCase = true) ||
             message.attachmentName?.contains(chatQuery, ignoreCase = true) == true ||
             message.sender.contains(chatQuery, ignoreCase = true) ||
@@ -1064,6 +1211,43 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
         }
     }
     val send = { replyTo?.let { vm.sendReply(conversationId, text, it) } ?: vm.send(conversationId, text); vm.updateTyping(conversationId, false); text = ""; replyTo = null }
+    val mentionQuery = text.substringAfterLast(' ', text).takeIf { it.startsWith("@") }?.drop(1).orEmpty()
+    val mentionSuggestions = if (conversation?.isGroup == true && mentionQuery.isNotBlank()) groupStates[conversationId]?.members.orEmpty().filter {
+        it.user.username.startsWith(mentionQuery, true) || it.user.displayName.startsWith(mentionQuery, true)
+    }.take(5) else emptyList()
+    threadRoot?.let { root ->
+        ThreadView(vm, conversationId, root, messages.filter { it.threadRootId == root.id }, { threadRoot = null })
+        return
+    }
+    actionTarget?.let { target ->
+        MessageOptionsSheet(
+            message = target,
+            dismiss = { actionTarget = null },
+            react = { emoji -> vm.reactToMessage(target, emoji); actionTarget = null },
+            info = { infoTarget = target; actionTarget = null },
+            copy = { actionTarget = null },
+            edit = { editTarget = target; editText = target.body; actionTarget = null },
+            reply = { replyTo = target; actionTarget = null },
+            thread = { threadRoot = target; actionTarget = null },
+            translate = { translateTarget = target; actionTarget = null },
+            delete = { deleteTarget = target; actionTarget = null }
+        )
+    }
+    infoTarget?.let { target -> MessageInfoSheet(target) { infoTarget = null } }
+    reactionTarget?.let { target -> ReactionInfoSheet(target) { reactionTarget = null } }
+    if (editTarget != null) AlertDialog(
+        onDismissRequest = { editTarget = null },
+        title = { Text("Edit message", fontWeight = FontWeight.Bold) },
+        text = { OutlinedTextField(editText, { editText = it.take(8000) }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 6) },
+        confirmButton = { Button(enabled = editText.trim().isNotBlank(), onClick = { editTarget?.let { vm.editMessage(it, editText) }; editTarget = null }) { Text("Save") } },
+        dismissButton = { OutlinedButton(onClick = { editTarget = null }) { Text("Cancel") } }
+    )
+    translateTarget?.let { target -> TranslationSheet(target) { translateTarget = null } }
+    if (aiOpen) LocalAiSheet(messages = timelineMessages, dismiss = { aiOpen = false }, send = { value -> text = value; aiOpen = false })
+    if (extrasOpen) RichMessageSheet(
+        dismiss = { extrasOpen = false },
+        send = { body, kind, metadata -> vm.sendRich(conversationId, body, kind, metadata); extrasOpen = false }
+    )
     if (!unlocked) {
         BackHandler { back() }
         Box(Modifier.fillMaxSize().background(Canvas).padding(24.dp), contentAlignment = Alignment.Center) {
@@ -1111,6 +1295,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     }
     LaunchedEffect(conversationId) {
         vm.markConversationRead(conversationId)
+        if (conversation?.isGroup == true) vm.refreshGroupMembers(conversationId)
         while (true) { vm.syncConversation(conversationId); vm.refreshTyping(conversationId); delay(1_000) }
     }
     DisposableEffect(conversationId) { onDispose { vm.updateTyping(conversationId, false); vm.stopVoiceRecording(conversationId, false) } }
@@ -1185,6 +1370,18 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         IconButton(onClick = { replyTo = null }) { Text("×", fontSize = 25.sp) }
                     }
                 }
+                AnimatedVisibility(mentionSuggestions.isNotEmpty()) {
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 210.dp).background(Canvas)) {
+                        items(mentionSuggestions, key = { "mention-${it.user.id}" }) { member ->
+                            Row(Modifier.fillMaxWidth().clickable {
+                                val marker = text.lastIndexOf('@')
+                                if (marker >= 0) text = text.substring(0, marker) + "@${member.user.username} "
+                            }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Avatar(member.user.displayName, 36.dp, Violet, member.user.avatarUrl); Spacer(Modifier.width(10.dp)); Column { Text(member.user.displayName, fontWeight = FontWeight.SemiBold); Text("@${member.user.username}", color = Muted, fontSize = 11.sp) }
+                            }
+                        }
+                    }
+                }
                 if (conversation?.blocked == true) {
                     Row(Modifier.fillMaxWidth().background(Peach).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Block, null, tint = Color(0xFFB3261E)); Spacer(Modifier.width(9.dp))
@@ -1206,10 +1403,14 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         DropdownMenuItem(text = { Text("Photo, video or file") }, leadingIcon = { Icon(Icons.Rounded.Description, null) }, onClick = { attachments = false; filePicker.launch("*/*") })
                         DropdownMenuItem(text = { Text("Current location") }, leadingIcon = { Icon(Icons.Rounded.LocationOn, null) }, onClick = { attachments = false; vm.shareLocation(conversationId) })
                         DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Rounded.ContactPhone, null) }, onClick = { attachments = false; contactPicker.launch(null) })
+                        DropdownMenuItem(text = { Text("Sticker, poll or link") }, leadingIcon = { Icon(Icons.Rounded.EmojiEmotions, null) }, onClick = { attachments = false; extrasOpen = true })
+                        DropdownMenuItem(text = { Text("Collaborate") }, leadingIcon = { Icon(Icons.Rounded.Brush, null) }, onClick = { attachments = false; extrasOpen = true })
+                        DropdownMenuItem(text = { Text("AI tools") }, leadingIcon = { Icon(Icons.Rounded.SmartToy, null) }, onClick = { attachments = false; aiOpen = true })
                     }
                 }
                 TextField(value = text, enabled = !voiceRecording, onValueChange = { value -> text = value.take(8000); vm.updateTyping(conversationId, text.isNotBlank()) }, placeholder = { Text(if (voiceRecording) "Recording… tap the mic to send" else "Message") }, modifier = Modifier.weight(1f).heightIn(min = 50.dp, max = 132.dp).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)), minLines = 1, maxLines = 5, shape = RoundedCornerShape(24.dp), colors = TextFieldDefaults.colors(focusedContainerColor = ClayWhite, unfocusedContainerColor = ClayWhite, disabledContainerColor = ClayWhite, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }))
-                Spacer(Modifier.width(8.dp)); IconButton(
+                IconButton(onClick = { aiOpen = true }, modifier = Modifier.size(42.dp)) { Icon(Icons.Rounded.SmartToy, "AI tools", tint = Violet) }
+                Spacer(Modifier.width(4.dp)); IconButton(
                     onClick = {
                         if (text.isNotBlank()) send()
                         else if (voiceRecording) vm.stopVoiceRecording(conversationId) else vm.startVoiceRecording(conversationId)
@@ -1238,7 +1439,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             if (chatQuery.isNotBlank() && displayedMessages.isEmpty()) item(key = "no-search-results") { Text("No matching messages or files", color = Muted, modifier = Modifier.fillMaxWidth().padding(24.dp)) }
             items(displayedMessages, key = { it.id }) { message ->
                 val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
-                MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { deleteTarget = message }, openAttachment = { vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.displayTitle() ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
+                MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { actionTarget = message }, onReactionInfo = { reactionTarget = message }, onPollVote = { option -> vm.votePoll(message, option) }, openAttachment = { vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.displayTitle() ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
             }
             if (chatQuery.isBlank() && typing.isNotEmpty()) item(key = "typing-indicator") { TypingBubble(typing.joinToString(", ")) }
         }
@@ -1247,15 +1448,48 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
+private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () -> Unit, onLongPress: () -> Unit, onReactionInfo: () -> Unit, onPollVote: (Int) -> Unit, openAttachment: () -> Unit, openContact: (String, String) -> Unit, joinCall: (String, Boolean, Boolean) -> Unit) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
         Box(Modifier.widthIn(min = 72.dp, max = 286.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = if (message.outgoing) 12.dp else 3.dp, bottomEnd = if (message.outgoing) 3.dp else 12.dp)).background(if (message.outgoing) Violet else MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 12.dp, vertical = 8.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
+                if (!message.replyToId.isNullOrBlank()) {
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(if (message.outgoing) Color.White.copy(alpha = .12f) else Violet.copy(alpha = .08f)).padding(7.dp)) {
+                        Icon(Icons.Rounded.Reply, null, tint = if (message.outgoing) Color.White else Violet, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(5.dp)); Text("Reply", color = if (message.outgoing) Color.White.copy(alpha = .82f) else Violet, fontSize = 11.sp)
+                    }
+                    Spacer(Modifier.height(5.dp))
+                }
                 when (message.kind) {
-                    "image", "video", "audio", "file" -> {
-                        Icon(Icons.Rounded.AttachFile, null, tint = if (message.outgoing) Lime else Violet)
+                    "sticker" -> Text(message.body, fontSize = 50.sp, modifier = Modifier.padding(4.dp))
+                    "poll" -> {
+                        val data = runCatching { JSONObject(message.metadata) }.getOrNull()
+                        Text(data?.optString("question").takeUnless { it.isNullOrBlank() } ?: message.body, color = foreground, fontWeight = FontWeight.Bold)
+                        val options = data?.optJSONArray("options")
+                        val votes = data?.optJSONObject("votes")
+                        if (options != null) repeat(options.length()) { index ->
+                            val voteCount = votes?.keys()?.asSequence()?.count { key -> votes.optInt(key, -1) == index } ?: 0
+                            Row(Modifier.fillMaxWidth().padding(top = 7.dp).border(1.dp, if (message.outgoing) Color.White.copy(alpha = .45f) else Violet, RoundedCornerShape(8.dp)).clickable { onPollVote(index) }.padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(16.dp).border(1.dp, if (message.outgoing) Color.White else Violet, CircleShape)); Spacer(Modifier.width(8.dp)); Text(options.optString(index), color = foreground, fontSize = 13.sp)
+                                Spacer(Modifier.weight(1f)); if (voteCount > 0) Text(voteCount.toString(), color = foreground, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    "link" -> {
+                        val data = runCatching { JSONObject(message.metadata) }.getOrNull()
+                        Icon(Icons.Rounded.Link, null, tint = if (message.outgoing) Color.White else Violet)
+                        Text(data?.optString("title").takeUnless { it.isNullOrBlank() } ?: "Shared link", color = foreground, fontWeight = FontWeight.Bold)
+                        Text(message.body, color = if (message.outgoing) Color.White.copy(alpha = .82f) else Violet, fontSize = 12.sp)
+                    }
+                    "collaborative_document", "collaborative_whiteboard" -> {
+                        Icon(if (message.kind == "collaborative_document") Icons.Rounded.InsertDriveFile else Icons.Rounded.Brush, null, tint = if (message.outgoing) Color.White else Violet)
+                        Text(if (message.kind == "collaborative_document") "Collaborative Document" else "Collaborative Whiteboard", color = foreground, fontWeight = FontWeight.Bold)
+                        Text(message.body, color = if (message.outgoing) Color.White.copy(alpha = .78f) else Muted, fontSize = 12.sp)
+                    }
+                    "audio" -> AudioMessageContent(message, foreground)
+                    "image", "video", "file" -> {
+                        if (message.kind == "image") AttachmentImage(message)
+                        else Icon(if (message.kind == "video") Icons.Rounded.Videocam else Icons.Rounded.AttachFile, null, tint = if (message.outgoing) Color.White else Violet)
                         Text(message.attachmentName ?: message.body, color = foreground, fontWeight = FontWeight.Bold)
                         Text(if (message.delivery == "uploading") "Uploading…" else "Tap to open", color = if (message.outgoing) Color.White.copy(alpha = .75f) else Muted, fontSize = 11.sp, modifier = Modifier.clickable(enabled = message.attachmentId != null, onClick = openAttachment))
                     }
@@ -1308,8 +1542,15 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                     )
                     else -> Text(message.body, color = foreground, fontSize = 14.sp, lineHeight = 19.sp)
                 }
+                val reactionObject = runCatching { JSONObject(message.reactions) }.getOrNull()
+                if (reactionObject != null && reactionObject.length() > 0) {
+                    Row(Modifier.padding(top = 5.dp).clip(RoundedCornerShape(12.dp)).background(if (message.outgoing) Color.White.copy(alpha = .16f) else Canvas).clickable(onClick = onReactionInfo).padding(horizontal = 7.dp, vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        reactionObject.keys().forEach { emoji -> Text("$emoji ${reactionObject.optInt(emoji)}", color = foreground, fontSize = 11.sp) }
+                    }
+                }
                 Spacer(Modifier.height(3.dp))
                 Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                    if (message.editedAt > 0L) { Text("Edited", color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted, fontSize = 9.sp, fontStyle = FontStyle.Italic); Spacer(Modifier.width(4.dp)) }
                     Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .72f) else Muted, fontSize = 9.sp)
                     if (message.outgoing) {
                         Spacer(Modifier.width(4.dp))
@@ -1318,6 +1559,246 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AttachmentImage(message: MessageEntity) {
+    val context = LocalContext.current
+    val bitmap by produceState<android.graphics.Bitmap?>(null, message.attachmentId) {
+        val id = message.attachmentId ?: return@produceState
+        value = com.grapaxels.mowell.auth.AuthRepository(context).downloadAttachment(id).getOrNull()?.second?.let { bytes ->
+            withContext(Dispatchers.Default) { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+        }
+    }
+    Box(Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+        if (bitmap == null) CircularProgressIndicator(Modifier.size(24.dp), color = Violet, strokeWidth = 2.dp)
+        else Image(bitmap!!.asImageBitmap(), message.attachmentName, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+    }
+    Spacer(Modifier.height(6.dp))
+}
+
+@Composable
+private fun AudioMessageContent(message: MessageEntity, foreground: Color) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var file by remember(message.id) { mutableStateOf<File?>(null) }
+    var downloading by remember(message.id) { mutableStateOf(false) }
+    var player by remember(message.id) { mutableStateOf<MediaPlayer?>(null) }
+    var playing by remember(message.id) { mutableStateOf(false) }
+    DisposableEffect(message.id) { onDispose { player?.release() } }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = {
+            if (file == null && !downloading) {
+                val id = message.attachmentId ?: return@IconButton
+                downloading = true
+                scope.launch {
+                    com.grapaxels.mowell.auth.AuthRepository(context).downloadAttachment(id).onSuccess { (_, bytes) ->
+                        file = withContext(Dispatchers.IO) { File(context.cacheDir, "audio_${message.id}.bin").apply { writeBytes(bytes) } }
+                    }
+                    downloading = false
+                }
+            } else file?.let { audioFile ->
+                if (player == null) {
+                    player = MediaPlayer().apply { setDataSource(audioFile.absolutePath); prepare(); setOnCompletionListener { playing = false } }
+                }
+                player?.let { media -> if (media.isPlaying) { media.pause(); playing = false } else { media.start(); playing = true } }
+            }
+        }) {
+            when { downloading -> CircularProgressIndicator(Modifier.size(22.dp), color = foreground, strokeWidth = 2.dp); file == null -> Icon(Icons.Rounded.CloudDownload, "Download audio", tint = foreground); else -> Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play", tint = foreground) }
+        }
+        Column(Modifier.weight(1f)) { Text(message.attachmentName ?: "Audio", color = foreground, fontWeight = FontWeight.SemiBold); Text(when { downloading -> "Downloading…"; file == null -> "Tap to download"; playing -> "Playing"; else -> "Ready to play" }, color = foreground.copy(alpha = .72f), fontSize = 11.sp) }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MessageOptionsSheet(
+    message: MessageEntity,
+    dismiss: () -> Unit,
+    react: (String) -> Unit,
+    info: () -> Unit,
+    copy: () -> Unit,
+    edit: () -> Unit,
+    reply: () -> Unit,
+    thread: () -> Unit,
+    translate: () -> Unit,
+    delete: () -> Unit
+) {
+    val clipboard = LocalClipboardManager.current
+    ModalBottomSheet(onDismissRequest = dismiss, containerColor = Canvas) {
+        LazyRow(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            items(listOf("😍", "👍", "🔥", "😊", "❤️", "😄")) { emoji ->
+                Box(Modifier.size(42.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant).clickable { react(emoji) }, contentAlignment = Alignment.Center) { Text(emoji, fontSize = 23.sp) }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        SheetAction(Icons.Rounded.Info, "Info", click = info)
+        SheetAction(Icons.Rounded.ContentCopy, "Copy") { clipboard.setText(AnnotatedString(message.body)); copy(); dismiss() }
+        if (message.outgoing && message.kind == "text") SheetAction(Icons.Rounded.Edit, "Edit", click = edit)
+        SheetAction(Icons.Rounded.Reply, "Reply", click = reply)
+        SheetAction(Icons.Rounded.Forum, "Reply in Thread", click = thread)
+        if (message.kind == "text") SheetAction(Icons.Rounded.Translate, "Translate", click = translate)
+        SheetAction(Icons.Rounded.Delete, "Delete", color = Color(0xFFFF3B4F), click = delete)
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+@Composable
+private fun SheetAction(icon: ImageVector, label: String, color: Color = Ink, click: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = click).padding(horizontal = 22.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(21.dp)); Spacer(Modifier.width(14.dp)); Text(label, color = color, fontSize = 14.sp)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MessageInfoSheet(message: MessageEntity, dismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = dismiss, containerColor = Canvas) {
+        Text("Message Info", Modifier.padding(horizontal = 20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Spacer(Modifier.height(12.dp))
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(message.body, Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp), maxLines = 4, overflow = TextOverflow.Ellipsis)
+            InfoLine("Sent", SimpleDateFormat("dd MMM yyyy, h:mm:ss a", Locale.getDefault()).format(Date(message.sentAt)))
+            InfoLine("Delivered by", route(message.route).lowercase().replaceFirstChar { it.uppercase() })
+            InfoLine("Status", message.delivery.replaceFirstChar { it.uppercase() })
+            if (message.editedAt > 0) InfoLine("Edited", SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault()).format(Date(message.editedAt)))
+        }
+        Spacer(Modifier.height(22.dp))
+    }
+}
+
+@Composable
+private fun InfoLine(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f), color = Muted); Text(value, color = Ink, fontWeight = FontWeight.Medium) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReactionInfoSheet(message: MessageEntity, dismiss: () -> Unit) {
+    val counts = runCatching { JSONObject(message.reactions) }.getOrElse { JSONObject() }
+    ModalBottomSheet(onDismissRequest = dismiss, containerColor = Canvas) {
+        Text("Reactions", Modifier.padding(horizontal = 20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Spacer(Modifier.height(10.dp))
+        if (counts.length() == 0) Text("No reactions yet", color = Muted, modifier = Modifier.padding(20.dp))
+        else counts.keys().forEach { emoji ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp)) { Text(emoji, fontSize = 25.sp); Spacer(Modifier.width(14.dp)); Text("${counts.optInt(emoji)} reaction${if (counts.optInt(emoji) == 1) "" else "s"}", Modifier.weight(1f)) }
+        }
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TranslationSheet(message: MessageEntity, dismiss: () -> Unit) {
+    var language by remember { mutableStateOf("Hindi") }
+    val translated = remember(message.body, language) { offlineTranslate(message.body, language) }
+    ModalBottomSheet(onDismissRequest = dismiss, containerColor = Canvas) {
+        Text("Message Translated", Modifier.padding(horizontal = 20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        LazyRow(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf("Hindi", "Spanish", "French")) { item -> FilterChip(selected = language == item, onClick = { language = item }, label = { Text(item) }) }
+        }
+        Column(Modifier.fillMaxWidth().padding(20.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(14.dp)) {
+            Text(message.body, color = Muted, fontSize = 12.sp); Spacer(Modifier.height(9.dp)); Text(translated, color = Ink, fontSize = 15.sp)
+        }
+        Text("Quick translation runs locally on this phone.", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 20.dp))
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+private fun offlineTranslate(value: String, language: String): String {
+    val dictionaries = mapOf(
+        "Hindi" to mapOf("hello" to "नमस्ते", "thank you" to "धन्यवाद", "yes" to "हाँ", "no" to "नहीं", "how are you" to "आप कैसे हैं"),
+        "Spanish" to mapOf("hello" to "hola", "thank you" to "gracias", "yes" to "sí", "no" to "no", "how are you" to "cómo estás"),
+        "French" to mapOf("hello" to "bonjour", "thank you" to "merci", "yes" to "oui", "no" to "non", "how are you" to "comment allez-vous")
+    )
+    val normalized = value.trim().lowercase()
+    return dictionaries[language]?.get(normalized) ?: "$value · $language"
+}
+
+@Composable
+private fun ThreadView(vm: MowellViewModel, conversationId: String, root: MessageEntity, replies: List<MessageEntity>, back: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    Scaffold(containerColor = Canvas, topBar = { CometBackHeader("Thread", back) }, bottomBar = {
+        Row(Modifier.fillMaxWidth().background(Canvas).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(text, { text = it.take(8000) }, placeholder = { Text("Reply in thread") }, modifier = Modifier.weight(1f), maxLines = 4)
+            IconButton(enabled = text.isNotBlank(), onClick = { vm.sendRich(conversationId, text, "text", threadRootId = root.id); text = "" }, modifier = Modifier.size(50.dp).clip(CircleShape).background(Violet)) { Icon(Icons.Rounded.Send, null, tint = Color.White) }
+        }
+    }) { padding ->
+        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            item { Text(root.sender, color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text(root.body, Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp)); HorizontalDivider(Modifier.padding(top = 16.dp), color = MaterialTheme.colorScheme.outline) }
+            items(replies, key = { "thread-${it.id}" }) { reply ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) { Text(reply.sender, color = if (reply.outgoing) Violet else Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Text(reply.body, fontSize = 14.sp); Text(time(reply.sentAt), color = Muted, fontSize = 10.sp) }
+            }
+            if (replies.isEmpty()) item { Text("No replies yet", color = Muted) }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LocalAiSheet(messages: List<MessageEntity>, dismiss: () -> Unit, send: (String) -> Unit) {
+    var view by remember { mutableStateOf("menu") }
+    var question by remember { mutableStateOf("") }
+    var answer by remember { mutableStateOf("") }
+    val lastIncoming = messages.lastOrNull { !it.outgoing }?.body.orEmpty()
+    val suggestions = when {
+        lastIncoming.contains("?", true) -> listOf("Yes, that works for me.", "Let me check and get back to you.", "Could you share a few more details?")
+        lastIncoming.contains("thank", true) -> listOf("You’re welcome!", "Happy to help.", "Anytime!")
+        else -> listOf("Sounds good!", "Got it, thanks.", "I’ll get back to you shortly.")
+    }
+    ModalBottomSheet(onDismissRequest = dismiss, containerColor = Canvas) {
+        when (view) {
+            "reply" -> { Text("Suggest a reply", Modifier.padding(20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp); suggestions.forEach { value -> SheetAction(Icons.Rounded.ChatBubble, value) { send(value) } } }
+            "summary" -> { Text("Conversation Summary", Modifier.padding(20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp); Text(messages.takeLast(8).joinToString(" ") { "${it.sender}: ${it.body.take(80)}" }.ifBlank { "There are no messages to summarize yet." }, Modifier.padding(horizontal = 20.dp), color = Muted, lineHeight = 20.sp) }
+            "starter" -> { Text("Conversation Starter", Modifier.padding(20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp); listOf("How has your day been?", "What are you working on today?", "Want to catch up this week?").forEach { SheetAction(Icons.Rounded.Forum, it) { send(it) } } }
+            "bot" -> {
+                Text("Ask AI Bot", Modifier.padding(20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(question, { question = it.take(300) }, label = { Text("Ask about this conversation") }, modifier = Modifier.fillMaxWidth())
+                    Button(enabled = question.isNotBlank(), onClick = {
+                        val terms = question.lowercase().split(Regex("\\W+")).filter { it.length > 3 }.toSet()
+                        val relevant = messages.asReversed().firstOrNull { item -> terms.any { item.body.contains(it, true) } }
+                        answer = relevant?.let { "${it.sender} said: ${it.body}" } ?: "I couldn’t find that in this conversation."
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Ask") }
+                    if (answer.isNotBlank()) Text(answer, Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp), color = Ink)
+                    Text("Answers are generated locally from messages stored on this phone.", color = Muted, fontSize = 11.sp)
+                }
+            }
+            else -> { SheetAction(Icons.Rounded.ChatBubble, "Suggest a reply") { view = "reply" }; SheetAction(Icons.Rounded.SmartToy, "Conversation summary") { view = "summary" }; SheetAction(Icons.Rounded.Forum, "Conversation starter") { view = "starter" }; SheetAction(Icons.Rounded.SmartToy, "Ask AI Bot") { view = "bot" } }
+        }
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RichMessageSheet(dismiss: () -> Unit, send: (String, String, JSONObject) -> Unit) {
+    var type by remember { mutableStateOf("sticker") }
+    var title by remember { mutableStateOf("") }
+    var second by remember { mutableStateOf("") }
+    ModalBottomSheet(onDismissRequest = dismiss, containerColor = Canvas) {
+        Text("Create", Modifier.padding(horizontal = 20.dp), fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        LazyRow(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf("sticker", "poll", "link", "document", "whiteboard")) { item -> FilterChip(selected = type == item, onClick = { type = item; title = ""; second = "" }, label = { Text(item.replaceFirstChar { it.uppercase() }) }) }
+        }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (type == "sticker") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) { items(listOf("😀", "🥳", "❤️", "👍", "🔥", "🎉")) { emoji -> Text(emoji, fontSize = 46.sp, modifier = Modifier.clickable { send(emoji, "sticker", JSONObject().put("shape", "square")) }) } }
+            } else {
+                OutlinedTextField(title, { title = it.take(500) }, label = { Text(when (type) { "poll" -> "Question"; "link" -> "Link title"; else -> "Name" }) }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(second, { second = it.take(1000) }, label = { Text(when (type) { "poll" -> "Options, separated by commas"; "link" -> "https://…"; else -> "Description" }) }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                Button(enabled = title.isNotBlank() && second.isNotBlank(), onClick = {
+                    when (type) {
+                        "poll" -> send(title, "poll", JSONObject().put("question", title).put("options", org.json.JSONArray(second.split(',').map(String::trim).filter(String::isNotBlank))))
+                        "link" -> send(second, "link", JSONObject().put("title", title).put("url", second))
+                        "document" -> send(title, "collaborative_document", JSONObject().put("description", second))
+                        else -> send(title, "collaborative_whiteboard", JSONObject().put("description", second))
+                    }
+                }, modifier = Modifier.fillMaxWidth()) { Text("Send") }
+            }
+        }
+        Spacer(Modifier.height(22.dp))
     }
 }
 

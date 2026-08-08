@@ -83,6 +83,11 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("attachmentId", message.attachmentId)
             put("attachmentMime", message.attachmentMime)
             put("attachmentName", message.attachmentName)
+            put("editedAt", message.editedAt)
+            put("replyToId", message.replyToId)
+            put("threadRootId", message.threadRootId)
+            put("reactions", message.reactions)
+            put("metadata", message.metadata)
         }
         db().insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         refreshMessages(message.conversationId)
@@ -146,6 +151,33 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         }
         val values = ContentValues().apply { put("delivery", delivery); put("route", route) }
         database.update("messages", values, "id = ?", arrayOf(id))
+        conversationId?.let(::refreshMessages)
+    }
+
+    suspend fun updateMessageContent(id: String, body: String, editedAt: Long) = withContext(Dispatchers.IO) {
+        val database = db()
+        val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
+            if (it.moveToFirst()) it.getString(0) else null
+        }
+        database.update("messages", ContentValues().apply { put("body", body); put("editedAt", editedAt) }, "id = ?", arrayOf(id))
+        conversationId?.let(::refreshMessages)
+    }
+
+    suspend fun updateMessageReactions(id: String, reactions: String) = withContext(Dispatchers.IO) {
+        val database = db()
+        val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
+            if (it.moveToFirst()) it.getString(0) else null
+        }
+        database.update("messages", ContentValues().apply { put("reactions", reactions) }, "id = ?", arrayOf(id))
+        conversationId?.let(::refreshMessages)
+    }
+
+    suspend fun updateMessageMetadata(id: String, metadata: String) = withContext(Dispatchers.IO) {
+        val database = db()
+        val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
+            if (it.moveToFirst()) it.getString(0) else null
+        }
+        database.update("messages", ContentValues().apply { put("metadata", metadata) }, "id = ?", arrayOf(id))
         conversationId?.let(::refreshMessages)
     }
 
@@ -280,7 +312,12 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
                 cursor.getString(cursor.getColumnIndexOrThrow("kind")),
                 cursor.getString(cursor.getColumnIndexOrThrow("attachmentId")),
                 cursor.getString(cursor.getColumnIndexOrThrow("attachmentMime")),
-                cursor.getString(cursor.getColumnIndexOrThrow("attachmentName"))
+                cursor.getString(cursor.getColumnIndexOrThrow("attachmentName")),
+                cursor.getLong(cursor.getColumnIndexOrThrow("editedAt")),
+                cursor.getString(cursor.getColumnIndexOrThrow("replyToId")),
+                cursor.getString(cursor.getColumnIndexOrThrow("threadRootId")),
+                cursor.getString(cursor.getColumnIndexOrThrow("reactions")),
+                cursor.getString(cursor.getColumnIndexOrThrow("metadata"))
             ))
         }
     }

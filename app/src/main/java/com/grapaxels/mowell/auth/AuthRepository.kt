@@ -22,7 +22,12 @@ data class AuthSession(val token: String, val user: UserProfile)
 data class ConnectionRequest(val id: String, val direction: String, val user: UserProfile)
 data class GroupInvitation(val id: String, val groupId: String, val groupTitle: String, val inviter: UserProfile)
 data class GroupMember(val user: UserProfile, val isAdmin: Boolean, val isCreator: Boolean)
-data class GroupMemberState(val members: List<GroupMember>, val creatorId: String, val viewerIsAdmin: Boolean)
+data class GroupMemberState(
+    val members: List<GroupMember>,
+    val creatorId: String,
+    val viewerIsAdmin: Boolean,
+    val bannedMembers: List<UserProfile> = emptyList()
+)
 data class AuthResult(val session: AuthSession? = null, val error: String? = null, val verificationEmail: String? = null)
 data class RemoteConversation(
     val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
@@ -34,7 +39,13 @@ data class RemoteMessage(
     val id: String, val conversationId: String, val sender: String, val body: String,
     val sentAt: Long, val outgoing: Boolean, val kind: String = "text",
     val attachmentId: String? = null, val attachmentMime: String? = null,
-    val attachmentName: String? = null
+    val attachmentName: String? = null,
+    val editedAt: Long = 0L,
+    val replyToId: String? = null,
+    val threadRootId: String? = null,
+    val reactions: String = "{}",
+    val metadata: String = "{}",
+    val syncAt: Long = sentAt
 )
 
 class AuthRepository(context: Context) {
@@ -239,10 +250,11 @@ class AuthRepository(context: Context) {
         }
     }
 
-    suspend fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>, groupType: String = "private", groupPassword: String = ""): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val body = JSONObject().put("title", title.trim()).put("isGroup", true)
                 .put("memberIds", org.json.JSONArray(memberIds.toList())).put("inviteIds", org.json.JSONArray(inviteIds.toList()))
+                .put("groupType", groupType).put("groupPassword", groupPassword)
             val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations")
                 .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
             val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
@@ -294,7 +306,9 @@ class AuthRepository(context: Context) {
                 val item = array.getJSONObject(index)
                 add(GroupMember(parseUser(item), item.optBoolean("isAdmin"), item.optBoolean("isCreator")))
             } }
-            GroupMemberState(members, json.optString("creatorId"), json.optBoolean("viewerIsAdmin"))
+            val bannedArray = json.optJSONArray("bannedMembers")
+            val banned = buildList { if (bannedArray != null) for (index in 0 until bannedArray.length()) add(parseUser(bannedArray.getJSONObject(index))) }
+            GroupMemberState(members, json.optString("creatorId"), json.optBoolean("viewerIsAdmin"), banned)
         }
     }
 
@@ -314,6 +328,18 @@ class AuthRepository(context: Context) {
                 .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").delete().build()).execute()
             val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
             if (!response.isSuccessful) error(json.optString("error", "Could not remove group member"))
+        }
+    }
+
+    suspend fun setGroupMemberBanned(conversationId: String, userId: String, banned: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val builder = Request.Builder().url("$serverUrl/v1/conversations/$conversationId/banned/$userId")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
+            val request = if (banned) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()
+            client.newCall(request).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not update banned member"))
+            }
         }
     }
 
@@ -480,6 +506,48 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun editMessage(conversationId: String, clientId: String, body: String): Result<Long> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val payload = JSONObject().put("body", body)
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/$clientId")
+                .header("Authorization", "Bearer ${session.token}")
+                .patch(payload.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Message could not be edited"))
+                parseDate(json.optJSONObject("message")?.optString("editedAt").orEmpty()).takeIf { it > 0L } ?: System.currentTimeMillis()
+            }
+        }
+    }
+
+    suspend fun toggleReaction(conversationId: String, clientId: String, emoji: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val payload = JSONObject().put("emoji", emoji)
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/$clientId/reactions")
+                .header("Authorization", "Bearer ${session.token}")
+                .post(payload.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Reaction could not be updated"))
+                (json.optJSONObject("reactions") ?: JSONObject()).toString()
+            }
+        }
+    }
+
+    suspend fun votePoll(conversationId: String, clientId: String, option: Int): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val payload = JSONObject().put("option", option)
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/$clientId/poll-vote")
+                .header("Authorization", "Bearer ${session.token}")
+                .post(payload.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Vote could not be saved"))
+                (json.optJSONObject("metadata") ?: JSONObject()).toString()
+            }
+        }
+    }
+
     suspend fun setBlocked(conversationId: String, blocked: Boolean): Result<Pair<Boolean, Boolean>> = withContext(Dispatchers.IO) {
         runCatching {
             val session = savedSession ?: error("Not signed in")
@@ -498,12 +566,24 @@ class AuthRepository(context: Context) {
         val senderObject = item.optJSONObject("sender")
         val senderId = senderObject?.optString("_id").orEmpty()
         val attachment = item.optJSONObject("attachment")
+        val reactionCounts = JSONObject()
+        val reactionArray = item.optJSONArray("reactions")
+        if (reactionArray != null) for (index in 0 until reactionArray.length()) {
+            val emoji = reactionArray.optJSONObject(index)?.optString("emoji").orEmpty()
+            if (emoji.isNotBlank()) reactionCounts.put(emoji, reactionCounts.optInt(emoji) + 1)
+        }
         return RemoteMessage(
             item.optString("clientId", item.optString("_id")), conversationId,
             senderObject?.let { it.optString("displayName", it.optString("username", "Mowell user")) } ?: "Mowell user",
             item.optString("body"), parseDate(item.optString("sentAt")), senderId == session.user.id,
             item.optString("kind", "text"), attachment?.optString("_id"),
-            attachment?.optString("mimeType"), attachment?.optString("fileName")
+            attachment?.optString("mimeType"), attachment?.optString("fileName"),
+            parseDate(item.optString("editedAt")),
+            item.optString("replyToClientId").takeIf { it.isNotBlank() && it != "null" },
+            item.optString("threadRootClientId").takeIf { it.isNotBlank() && it != "null" },
+            reactionCounts.toString(),
+            (item.optJSONObject("metadata") ?: JSONObject()).toString(),
+            maxOf(parseDate(item.optString("updatedAt")), parseDate(item.optString("sentAt")))
         )
     }
 
@@ -536,7 +616,7 @@ class AuthRepository(context: Context) {
     }
 
     private fun parseUser(json: JSONObject) = UserProfile(
-        json.getString("id"), json.getString("username"), json.optString("email"),
+        json.getString("id"), json.getString("username"), json.optString("email", ""),
         json.optString("displayName", json.getString("username")), json.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" }
     )
 

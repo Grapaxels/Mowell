@@ -463,7 +463,18 @@ app.post("/v1/conversations", auth, async (req, res) => {
     const accepted = await Contact.countDocuments({ users: req.auth.sub, status: "accepted", pairKey: { $in: requestedMemberIds.map((id) => contactPair(req.auth.sub, id)) } });
     if (accepted !== requestedMemberIds.length) return res.status(403).json({ error: "Only accepted contacts can be added directly to a group" });
   }
-  const conversation = await Conversation.create({ title: req.body.title, isGroup, members: memberIds, createdBy: req.auth.sub, admins: isGroup ? [req.auth.sub] : [] });
+  const groupType = ["public", "private", "password"].includes(req.body.groupType) ? req.body.groupType : "private";
+  const groupPassword = String(req.body.groupPassword || "");
+  if (isGroup && groupType === "password" && groupPassword.length < 4) return res.status(400).json({ error: "Group password must have at least four characters" });
+  const conversation = await Conversation.create({
+    title: req.body.title,
+    isGroup,
+    groupType: isGroup ? groupType : "private",
+    groupPasswordHash: isGroup && groupType === "password" ? await bcrypt.hash(groupPassword, 12) : undefined,
+    members: memberIds,
+    createdBy: req.auth.sub,
+    admins: isGroup ? [req.auth.sub] : []
+  });
   if (isGroup && inviteIds.length) {
     const validInvites = await User.find({ _id: { $in: inviteIds } }).select("_id");
     await Promise.all(validInvites.map((user) => GroupInvitation.findOneAndUpdate(
@@ -530,7 +541,8 @@ app.post("/v1/conversations/:id/members", auth, async (req, res) => {
 
 app.get("/v1/conversations/:id/members", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub })
-    .populate("members", "username displayName avatarUrl lastSeenAt");
+    .populate("members", "username displayName avatarUrl lastSeenAt")
+    .populate("bannedMembers", "username displayName avatarUrl lastSeenAt");
   if (!conversation) return res.sendStatus(404);
   const creatorId = conversation.createdBy.toString();
   const adminIds = new Set((conversation.admins || []).map(String));
@@ -538,8 +550,29 @@ app.get("/v1/conversations/:id/members", auth, async (req, res) => {
   res.json({
     creatorId,
     viewerIsAdmin: isGroupAdmin(conversation, req.auth.sub),
-    members: conversation.members.map((user) => ({ ...directoryUser(user), isCreator: user._id.toString() === creatorId, isAdmin: adminIds.has(user._id.toString()) }))
+    members: conversation.members.map((user) => ({ ...directoryUser(user), isCreator: user._id.toString() === creatorId, isAdmin: adminIds.has(user._id.toString()) })),
+    bannedMembers: (conversation.bannedMembers || []).map(directoryUser)
   });
+});
+
+app.post("/v1/conversations/:id/banned/:userId", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can ban members" });
+  if (conversation.createdBy.toString() === req.params.userId) return res.status(409).json({ error: "The group creator cannot be banned" });
+  const targetIsAdmin = (conversation.admins || []).some((id) => id.toString() === req.params.userId);
+  if (targetIsAdmin && conversation.createdBy.toString() !== req.auth.sub) return res.status(403).json({ error: "Only the group creator can ban another admin" });
+  await Conversation.updateOne({ _id: conversation._id }, {
+    $pull: { members: req.params.userId, admins: req.params.userId },
+    $addToSet: { bannedMembers: req.params.userId }
+  });
+  res.json({ ok: true });
+});
+
+app.delete("/v1/conversations/:id/banned/:userId", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, isGroup: true, members: req.auth.sub });
+  if (!conversation || !isGroupAdmin(conversation, req.auth.sub)) return res.status(403).json({ error: "Only group admins can unban members" });
+  await Conversation.updateOne({ _id: conversation._id }, { $pull: { bannedMembers: req.params.userId } });
+  res.json({ ok: true });
 });
 
 app.post("/v1/conversations/:id/admins/:userId", auth, async (req, res) => {
@@ -632,7 +665,10 @@ app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
   const allowed = await Conversation.exists({ _id: req.params.id, members: req.auth.sub });
   if (!allowed) return res.sendStatus(404);
   const filter = { conversation: req.params.id };
-  if (req.query.after) filter.sentAt = { $gt: new Date(String(req.query.after)) };
+  if (req.query.after) {
+    const after = new Date(String(req.query.after));
+    filter.$or = [{ sentAt: { $gt: after } }, { updatedAt: { $gt: after } }];
+  }
   else filter.sentAt = { $lt: req.query.before ? new Date(String(req.query.before)) : new Date() };
   const messages = await Message.find(filter).sort({ sentAt: req.query.after ? 1 : -1 }).limit(100)
     .populate("sender", "username displayName avatarUrl")
@@ -649,11 +685,71 @@ app.post("/v1/conversations/:id/messages", auth, async (req, res) => {
   if (!body || !clientId) return res.status(400).json({ error: "clientId and body are required" });
   const message = await Message.findOneAndUpdate(
     { conversation: conversation._id, clientId },
-    { $setOnInsert: { sender: req.auth.sub, body, kind: req.body.kind || "text", sentAt: new Date() } },
+    { $setOnInsert: {
+      sender: req.auth.sub,
+      body,
+      kind: req.body.kind || "text",
+      replyToClientId: String(req.body.replyToClientId || "").trim() || undefined,
+      threadRootClientId: String(req.body.threadRootClientId || "").trim() || undefined,
+      metadata: req.body.metadata && typeof req.body.metadata === "object" ? req.body.metadata : {},
+      sentAt: new Date()
+    } },
     { upsert: true, new: true }
   ).populate("sender", "username displayName avatarUrl");
   conversation.lastMessageAt = message.sentAt; await conversation.save();
   res.status(201).json({ message });
+});
+
+app.patch("/v1/conversations/:id/messages/:clientId", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  if (!conversation) return res.sendStatus(404);
+  const body = String(req.body.body || "").trim();
+  if (!body) return res.status(400).json({ error: "Message cannot be empty" });
+  const message = await Message.findOne({ conversation: conversation._id, clientId: req.params.clientId });
+  if (!message) return res.sendStatus(404);
+  if (message.sender.toString() !== req.auth.sub) return res.status(403).json({ error: "Only the sender can edit this message" });
+  if (message.kind !== "text") return res.status(409).json({ error: "Only text messages can be edited" });
+  message.body = body;
+  message.editedAt = new Date();
+  await message.save();
+  res.json({ message });
+});
+
+app.post("/v1/conversations/:id/messages/:clientId/reactions", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  if (!conversation) return res.sendStatus(404);
+  const emoji = String(req.body.emoji || "").trim().slice(0, 16);
+  if (!emoji) return res.status(400).json({ error: "Choose a reaction" });
+  const message = await Message.findOne({ conversation: conversation._id, clientId: req.params.clientId });
+  if (!message) return res.sendStatus(404);
+  const ownIndex = (message.reactions || []).findIndex((item) => item.user.toString() === req.auth.sub && item.emoji === emoji);
+  if (ownIndex >= 0) message.reactions.splice(ownIndex, 1);
+  else {
+    message.reactions = (message.reactions || []).filter((item) => item.user.toString() !== req.auth.sub);
+    message.reactions.push({ user: req.auth.sub, emoji });
+  }
+  await message.save();
+  const counts = message.reactions.reduce((result, item) => {
+    result[item.emoji] = (result[item.emoji] || 0) + 1;
+    return result;
+  }, {});
+  res.json({ reactions: counts });
+});
+
+app.post("/v1/conversations/:id/messages/:clientId/poll-vote", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub }).select("_id");
+  if (!conversation) return res.sendStatus(404);
+  const message = await Message.findOne({ conversation: conversation._id, clientId: req.params.clientId, kind: "poll" });
+  if (!message) return res.sendStatus(404);
+  const options = Array.isArray(message.metadata?.options) ? message.metadata.options : [];
+  const option = Number(req.body.option);
+  if (!Number.isInteger(option) || option < 0 || option >= options.length) return res.status(400).json({ error: "Choose a valid poll option" });
+  const metadata = { ...(message.metadata || {}) };
+  metadata.votes = { ...(metadata.votes || {}), [req.auth.sub]: option };
+  message.metadata = metadata;
+  message.markModified("metadata");
+  await message.save();
+  res.json({ metadata });
 });
 
 app.delete("/v1/conversations/:id/messages/:clientId", auth, async (req, res) => {

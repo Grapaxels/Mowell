@@ -234,7 +234,18 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         sendTyped(conversationId, "↩ ${reply.sender}: $preview\n${body.trim()}", "text")
     }
 
-    private fun sendTyped(conversationId: String, body: String, kind: String) {
+    fun sendRich(conversationId: String, body: String, kind: String, metadata: JSONObject = JSONObject(), threadRootId: String? = null) {
+        sendTyped(conversationId, body, kind, threadRootId = threadRootId, metadata = metadata)
+    }
+
+    private fun sendTyped(
+        conversationId: String,
+        body: String,
+        kind: String,
+        replyToId: String? = null,
+        threadRootId: String? = null,
+        metadata: JSONObject = JSONObject()
+    ) {
         if (body.isBlank()) return
         if (conversations.value.find { it.id == conversationId }?.blocked == true) {
             _authError.value = "Messaging is unavailable because this contact is blocked"
@@ -244,7 +255,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         val trimmedBody = body.trim()
-        val message = MessageEntity(id, conversationId, "You", trimmedBody, now, true, "ROUTING", "sending", kind)
+        val message = MessageEntity(id, conversationId, "You", trimmedBody, now, true, "ROUTING", "sending", kind,
+            replyToId = replyToId, threadRootId = threadRootId, metadata = metadata.toString())
         // Update the open chat synchronously so the send action feels instant;
         // database persistence and transport acknowledgement never block the UI.
         dao.stageOutgoingMessage(message)
@@ -252,8 +264,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             dao.insertMessage(message)
             val existing = conversations.value.find { it.id == conversationId }
             dao.upsertConversation(existing?.copy(subtitle = preview(message), updatedAt = now) ?: ConversationEntity(conversationId, "Conversation", preview(message), false, now))
-            val payload = JSONObject().put("clientId", id).put("body", trimmedBody).put("kind", kind).toString()
-            val result = router.send(conversationId, selectedPeer, payload)
+            val payload = JSONObject().put("clientId", id).put("body", trimmedBody).put("kind", kind).put("metadata", metadata)
+            replyToId?.let { payload.put("replyToClientId", it) }
+            threadRootId?.let { payload.put("threadRootClientId", it) }
+            val result = router.send(conversationId, selectedPeer, payload.toString())
             dao.updateDelivery(id, if (result.delivered) "sent" else "stored", result.route.name)
             if (kind == "text" && NotificationPreferences.sendSound(getApplication())) playSendTone()
         }
@@ -325,7 +339,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
                     item.body, item.sentAt, item.outgoing, Route.INTERNET.name, "sent", item.kind,
-                    item.attachmentId, item.attachmentMime, item.attachmentName
+                    item.attachmentId, item.attachmentMime, item.attachmentName, item.editedAt,
+                    item.replyToId, item.threadRootId, item.reactions, item.metadata
                 )
                 dao.insertMessage(message)
                 if (isNew && !item.outgoing) dao.revealConversationOnIncoming(conversationId, item.sentAt)
@@ -340,9 +355,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                     runCatching { JSONObject(item.body).optString("room") }.getOrNull()?.takeIf { it.isNotBlank() }?.let { CallCoordinator.endIfActive(getApplication(), it) }
                 }
             }
-            remote.maxOfOrNull { it.sentAt }?.let { syncCursors[conversationId] = maxOf(syncCursors[conversationId] ?: 0L, it) }
+            remote.maxOfOrNull { it.syncAt }?.let { syncCursors[conversationId] = maxOf(syncCursors[conversationId] ?: 0L, it) }
             remote.lastOrNull()?.let { last ->
-                val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, "sent", last.kind, last.attachmentId, last.attachmentMime, last.attachmentName)
+                val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, "sent", last.kind, last.attachmentId, last.attachmentMime, last.attachmentName, last.editedAt, last.replyToId, last.threadRootId, last.reactions, last.metadata)
                 val current = dao.getConversation(conversationId)
                 dao.upsertConversation(current?.copy(subtitle = preview(message), updatedAt = last.sentAt) ?: ConversationEntity(conversationId, title, preview(message), false, last.sentAt))
             }
@@ -512,6 +527,32 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun editMessage(message: MessageEntity, body: String) {
+        val clean = body.trim()
+        if (!message.outgoing || message.kind != "text" || clean.isBlank()) return
+        viewModelScope.launch {
+            auth.editMessage(message.conversationId, message.id, clean).onSuccess { editedAt ->
+                dao.updateMessageContent(message.id, clean, editedAt)
+            }.onFailure { _authError.value = it.message ?: "Message could not be edited" }
+        }
+    }
+
+    fun reactToMessage(message: MessageEntity, emoji: String) {
+        viewModelScope.launch {
+            auth.toggleReaction(message.conversationId, message.id, emoji).onSuccess { reactions ->
+                dao.updateMessageReactions(message.id, reactions)
+            }.onFailure { _authError.value = it.message ?: "Reaction could not be updated" }
+        }
+    }
+
+    fun votePoll(message: MessageEntity, option: Int) {
+        viewModelScope.launch {
+            auth.votePoll(message.conversationId, message.id, option).onSuccess { metadata ->
+                dao.updateMessageMetadata(message.id, metadata)
+            }.onFailure { _authError.value = it.message ?: "Vote could not be saved" }
+        }
+    }
+
     fun floatingNotifications() = NotificationPreferences.floating(getApplication())
     fun setFloatingNotifications(enabled: Boolean) = NotificationPreferences.setFloating(getApplication(), enabled)
     fun sendSoundEnabled() = NotificationPreferences.sendSound(getApplication())
@@ -646,9 +687,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>, onReady: (String) -> Unit) {
+    fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>, groupType: String = "private", groupPassword: String = "", onReady: (String) -> Unit) {
         viewModelScope.launch {
-            auth.createGroup(title, memberIds, inviteIds).onSuccess { conversationId ->
+            auth.createGroup(title, memberIds, inviteIds, groupType, groupPassword).onSuccess { conversationId ->
                 dao.upsertConversation(ConversationEntity(conversationId, title.trim(), "Group created", true, System.currentTimeMillis()))
                 syncAllConversations()
                 onReady(conversationId)
@@ -683,6 +724,14 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             auth.removeGroupMember(conversationId, userId).onSuccess { refreshGroupMembers(conversationId); syncAllConversations() }
                 .onFailure { _authError.value = it.message ?: "Could not remove group member" }
+        }
+    }
+
+    fun setGroupMemberBanned(conversationId: String, userId: String, banned: Boolean) {
+        viewModelScope.launch {
+            auth.setGroupMemberBanned(conversationId, userId, banned).onSuccess {
+                refreshGroupMembers(conversationId); syncAllConversations()
+            }.onFailure { _authError.value = it.message ?: "Could not update banned member" }
         }
     }
 

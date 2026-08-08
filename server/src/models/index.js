@@ -23,9 +23,12 @@ const userSchema = new mongoose.Schema({
 const conversationSchema = new mongoose.Schema({
   title: { type: String, trim: true, maxlength: 80 },
   isGroup: { type: Boolean, default: false },
+  groupType: { type: String, enum: ["public", "private", "password"], default: "private" },
+  groupPasswordHash: { type: String, select: false },
   members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   admins: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  bannedMembers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   avatarUrl: String,
   avatarData: { type: Buffer, select: false },
   avatarMime: { type: String, select: false },
@@ -38,8 +41,16 @@ const messageSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   body: { type: String, required: true, maxlength: 8000 },
-  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "call", "call_end", "system"], default: "text" },
+  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "call", "call_end", "system", "sticker", "poll", "link", "collaborative_document", "collaborative_whiteboard"], default: "text" },
   attachment: { type: mongoose.Schema.Types.ObjectId, ref: "Media" },
+  editedAt: Date,
+  replyToClientId: { type: String, maxlength: 100 },
+  threadRootClientId: { type: String, maxlength: 100 },
+  reactions: [{
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    emoji: { type: String, required: true, maxlength: 16 }
+  }],
+  metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   sentAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 messageSchema.index({ conversation: 1, clientId: 1 }, { unique: true });

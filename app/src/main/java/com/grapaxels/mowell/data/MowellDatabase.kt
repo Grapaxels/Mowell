@@ -9,7 +9,7 @@ class MowellDatabase private constructor(context: Context) {
     private val mowellDao by lazy { MowellDao { helper.writableDatabase } }
     fun dao(): MowellDao = mowellDao
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 10) {
+    private class Helper(context: Context) : SQLiteOpenHelper(context, "mowell.db", null, 11) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""
                 CREATE TABLE conversations (
@@ -42,7 +42,12 @@ class MowellDatabase private constructor(context: Context) {
                     kind TEXT NOT NULL DEFAULT 'text',
                     attachmentId TEXT,
                     attachmentMime TEXT,
-                    attachmentName TEXT
+                    attachmentName TEXT,
+                    editedAt INTEGER NOT NULL DEFAULT 0,
+                    replyToId TEXT,
+                    threadRootId TEXT,
+                    reactions TEXT NOT NULL DEFAULT '{}',
+                    metadata TEXT NOT NULL DEFAULT '{}'
                 )
             """.trimIndent())
             db.execSQL("CREATE INDEX index_messages_conversation ON messages(conversationId, sentAt)")
@@ -81,6 +86,11 @@ class MowellDatabase private constructor(context: Context) {
             addColumnIfMissing(db, "messages", "attachmentId", "TEXT")
             addColumnIfMissing(db, "messages", "attachmentMime", "TEXT")
             addColumnIfMissing(db, "messages", "attachmentName", "TEXT")
+            addColumnIfMissing(db, "messages", "editedAt", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "messages", "replyToId", "TEXT")
+            addColumnIfMissing(db, "messages", "threadRootId", "TEXT")
+            addColumnIfMissing(db, "messages", "reactions", "TEXT NOT NULL DEFAULT '{}'")
+            addColumnIfMissing(db, "messages", "metadata", "TEXT NOT NULL DEFAULT '{}'")
             addColumnIfMissing(db, "conversations", "username", "TEXT")
             addColumnIfMissing(db, "conversations", "avatarUrl", "TEXT")
             addColumnIfMissing(db, "conversations", "lastSeenAt", "INTEGER NOT NULL DEFAULT 0")
