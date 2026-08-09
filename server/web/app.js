@@ -20,7 +20,7 @@ const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
   iceServers: [{ urls: 'stun:stun.relay.metered.ca:80' }],
-  facingMode: 'user'
+  facingMode: 'user', screenStream: null
 };
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({
@@ -575,18 +575,26 @@ function updateRemoteVideoLayout() {
   const container = $('remote-videos');
   const videos = [...container.querySelectorAll('video[data-remote-media]')]
     .filter((video) => video.videoWidth > 0 && video.videoHeight > 0);
-  container.classList.toggle('has-remote-video', videos.length > 0);
+  const hasVideo = videos.length > 0;
+  container.classList.toggle('has-remote-video', hasVideo);
   container.classList.toggle('single-remote-video', videos.length === 1);
-  if (videos.length) $('call-status').textContent = 'Video connected';
+  container.querySelector('.call-waiting')?.classList.toggle('hidden', hasVideo);
+  container.style.display = videos.length === 1 ? 'block' : 'grid';
+  container.querySelectorAll('video[data-remote-media]').forEach((video) => {
+    const single = videos.length === 1 && videos[0] === video;
+    video.style.position = single ? 'absolute' : '';
+    video.style.inset = single ? '0' : '';
+  });
+  if (hasVideo) $('call-status').textContent = 'Video connected';
 }
 
-async function tuneSender(sender, kind) {
+async function tuneSender(sender, kind, screen = false) {
   try {
     const parameters = sender.getParameters();
     if (!parameters.encodings?.length) parameters.encodings = [{}];
     if (kind === 'video') {
-      parameters.degradationPreference = 'maintain-framerate';
-      parameters.encodings[0].maxBitrate = 5000000;
+      parameters.degradationPreference = screen ? 'maintain-resolution' : 'maintain-framerate';
+      parameters.encodings[0].maxBitrate = screen ? 6000000 : 5000000;
       parameters.encodings[0].maxFramerate = 30;
       parameters.encodings[0].scaleResolutionDownBy = 1;
     } else {
@@ -614,8 +622,12 @@ async function makePeer(id, name, shouldOffer) {
   pc.ontrack = (event) => {
     if (!remote.getTracks().some((track) => track.id === event.track.id)) remote.addTrack(event.track);
     let media = document.getElementById(`remote-${id}`);
+    if (media && event.track.kind === 'video' && !(media instanceof HTMLVideoElement)) {
+      media.remove();
+      media = null;
+    }
     if (!media) {
-      media = document.createElement(call.video ? 'video' : 'audio');
+      media = document.createElement(event.track.kind === 'video' || call.video ? 'video' : 'audio');
       media.id = `remote-${id}`; media.dataset.remoteMedia = 'true'; media.autoplay = true; media.playsInline = true;
       if (media instanceof HTMLVideoElement) {
         media.addEventListener('loadeddata', updateRemoteVideoLayout);
@@ -747,8 +759,10 @@ async function joinCallRoom(room, conversation, video, initiator) {
 }
 
 async function openCall({ room, conversation, video, initiator }) {
-  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.peers.clear();
+  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.screenStream = null; call.peers.clear();
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
+  $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
+  $('share-screen-call').classList.remove('active'); $('share-screen-call').querySelector('span').textContent = 'Share';
   $('incoming-call').classList.add('hidden'); $('call-screen').classList.remove('hidden');
   const title = displayTitle(conversation);
   $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
@@ -780,10 +794,12 @@ async function endCall(notify = true) {
   const room = call.room;
   call.closed = true; clearInterval(call.timer);
   if (notify) await callSignal('leave', { reason: 'ended' }).catch(() => {});
+  call.screenStream?.getTracks().forEach((track) => { track.onended = null; track.stop(); }); call.screenStream = null;
   call.stream?.getTracks().forEach((track) => track.stop());
   call.peers.forEach((peer) => { clearTimeout(peer.restartTimer); peer.pc.close(); }); call.peers.clear();
   $('remote-videos').querySelectorAll('[data-remote-media]').forEach((media) => media.remove());
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
+  $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
   $('local-video').srcObject = null; $('call-screen').classList.add('hidden');
   if (state.incoming?.data?.room === room) state.incoming = null;
   if (state.active) loadMessages({ preserve: true }).catch(() => {});
@@ -794,12 +810,74 @@ function toggleMute() {
   track.enabled = !track.enabled; $('mute-call').classList.toggle('off', !track.enabled); $('mute-call').querySelector('span').textContent = track.enabled ? 'Mute' : 'Unmute';
 }
 function toggleCamera() {
+  if (call.screenStream) return toast('Stop screen sharing before changing the camera.');
   const track = call.stream?.getVideoTracks()[0]; if (!track) return toast('This is a voice call.');
   track.enabled = !track.enabled; $('camera-call').classList.toggle('off', !track.enabled); $('camera-call').querySelector('span').textContent = track.enabled ? 'Camera' : 'Start video';
   callSignal('media', { video: track.enabled }).catch(() => {});
 }
 
+async function stopScreenShare(notify = true) {
+  const shared = call.screenStream;
+  if (!shared) return;
+  call.screenStream = null;
+  const cameraTrack = call.stream?.getVideoTracks()[0] || null;
+  for (const peer of call.peers.values()) {
+    const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
+    if (sender) await sender.replaceTrack(cameraTrack).catch(() => {});
+  }
+  shared.getTracks().forEach((track) => { track.onended = null; track.stop(); });
+  $('local-video').srcObject = call.stream;
+  $('local-video').classList.toggle('hidden', !cameraTrack);
+  $('local-video').classList.toggle('rear', call.facingMode === 'environment');
+  $('share-screen-call').classList.remove('active');
+  $('share-screen-call').querySelector('span').textContent = 'Share';
+  if (notify) callSignal('media', { video: Boolean(cameraTrack), screen: false }).catch(() => {});
+  toast('Screen sharing stopped.');
+}
+
+async function toggleScreenShare() {
+  if (call.screenStream) return stopScreenShare();
+  if (!navigator.mediaDevices?.getDisplayMedia) return toast('Screen sharing is not supported by this browser.');
+  const button = $('share-screen-call');
+  setLoading(button, true);
+  try {
+    const shared = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } },
+      audio: false
+    });
+    const screenTrack = shared.getVideoTracks()[0];
+    if (!screenTrack) throw new Error('No screen was selected.');
+    screenTrack.contentHint = 'detail';
+    call.screenStream = shared;
+    call.video = true;
+    await callSignal('media', { video: true, screen: true }).catch(() => {});
+    for (const peer of call.peers.values()) {
+      let sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
+      if (sender) {
+        await sender.replaceTrack(screenTrack);
+        await tuneSender(sender, 'video', true);
+      } else {
+        sender = peer.pc.addTrack(screenTrack, shared);
+        await tuneSender(sender, 'video', true);
+        await sendOffer(peer);
+      }
+    }
+    $('local-video').srcObject = shared;
+    $('local-video').classList.remove('hidden');
+    $('local-video').classList.add('rear');
+    button.classList.add('active');
+    button.querySelector('span').textContent = 'Stop share';
+    screenTrack.onended = () => stopScreenShare();
+    toast('Your screen is now visible to call members.');
+  } catch (error) {
+    if (error.name !== 'NotAllowedError') toast(error.message || 'Screen sharing could not start.');
+  } finally {
+    setLoading(button, false);
+  }
+}
+
 async function flipCamera() {
+  if (call.screenStream) return toast('Stop screen sharing before switching the camera.');
   const oldTrack = call.stream?.getVideoTracks()[0];
   if (!oldTrack) return toast('Start video before flipping the camera.');
   const nextFacing = call.facingMode === 'user' ? 'environment' : 'user';
@@ -872,6 +950,7 @@ $('hangup-call').onclick = () => endCall(true);
 $('mute-call').onclick = toggleMute;
 $('camera-call').onclick = toggleCamera;
 $('flip-call').onclick = flipCamera;
+$('share-screen-call').onclick = toggleScreenShare;
 window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
 
 boot();
