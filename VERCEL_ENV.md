@@ -28,5 +28,5 @@ Generate `JWT_SECRET` locally with PowerShell:
 ```
 
 Never commit the real MongoDB URI, JWT secret, Google credentials or Android signing keys.
-The 2.4.2 version, server-hosted APK URL, and verified SHA-256 are built into
+The 2.4.3 version, server-hosted APK URL, and verified SHA-256 are built into
 the API, so Vercel does not need Android version, URL, or hash variables.

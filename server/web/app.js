@@ -19,7 +19,7 @@ const state = {
 const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
-  iceServers: [{ urls: 'stun:stun.relay.metered.ca:80' }],
+  iceServers: [{ urls: ['stun:35.154.86.33:3478'] }],
   facingMode: 'user', screenStream: null
 };
 
@@ -557,7 +557,7 @@ async function loadIceConfiguration() {
     const data = await api('/v1/calls/ice-servers');
     if (Array.isArray(data.iceServers) && data.iceServers.length) call.iceServers = data.iceServers;
   } catch {
-    call.iceServers = [{ urls: 'stun:stun.relay.metered.ca:80' }];
+    call.iceServers = [{ urls: ['stun:35.154.86.33:3478'] }];
   }
 }
 
@@ -608,6 +608,7 @@ async function makePeer(id, name, shouldOffer) {
   if (call.peers.has(id)) return call.peers.get(id);
   const pc = new RTCPeerConnection({
     iceServers: call.iceServers,
+    iceTransportPolicy: 'all',
     iceCandidatePoolSize: 10,
     bundlePolicy: 'max-bundle',
     rtcpMuxPolicy: 'require'

@@ -45,7 +45,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.2.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.3.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -64,11 +64,12 @@ const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // Fixed Metered ICE configuration requested for Mowell. The route exposing it
 // is authenticated so it is not included in the public web bundle.
 const callIceServers = [
-  { urls: "stun:stun.relay.metered.ca:80" },
-  { urls: "turn:global.relay.metered.ca:80", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" },
-  { urls: "turn:global.relay.metered.ca:80?transport=tcp", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" },
-  { urls: "turn:global.relay.metered.ca:443", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" },
-  { urls: "turns:global.relay.metered.ca:443?transport=tcp", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" }
+  { urls: ["stun:35.154.86.33:3478"] },
+  {
+    urls: ["turn:35.154.86.33:3478?transport=udp", "turn:35.154.86.33:3478?transport=tcp"],
+    username: "turnuser",
+    credential: "@Grapaxels1338"
+  }
 ];
 const disposableDomains = new Set([
   "10minutemail.com", "guerrillamail.com", "guerrillamailblock.com", "mailinator.com", "temp-mail.org",
@@ -194,10 +195,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 42,
-  versionName: "2.4.2",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.2.apk",
-  sha256: "991FF88DC805A1C6C1079F6EBD192B1237A1F121C0EDC9458D94364F85DC3193",
+  versionCode: 43,
+  versionName: "2.4.3",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.3.apk",
+  sha256: "2C5F88CE7F1EB3333293BBC1CD64E3351298B26F4A3A2164829E26565B0A0AB0",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 
