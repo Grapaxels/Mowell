@@ -9,6 +9,7 @@ import mongoose from "mongoose";
 import nodemailer from "nodemailer";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
+import { fileURLToPath } from "node:url";
 import { CallRoom, CallSignal, Conversation, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
@@ -18,9 +19,31 @@ if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must contain
 
 if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { autoIndex: true });
 const app = express();
-app.use(helmet());
+const webRoot = fileURLToPath(new URL("../web", import.meta.url));
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      mediaSrc: ["'self'", "blob:"],
+      connectSrc: ["'self'", "https://mowell-api.grapaxels.in", "https://mowellweb.grapaxels.in"],
+      workerSrc: ["'self'", "blob:"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"]
+    }
+  }
+}));
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 app.use(express.json({ limit: "4mb" }));
+app.use(express.static(webRoot, {
+  index: "index.html",
+  maxAge: "5m",
+  setHeaders: (res, path) => {
+    if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+  }
+}));
 
 const publicUser = (user) => ({
   id: user._id.toString(), username: user.username, email: user.email,
@@ -313,8 +336,16 @@ app.get("/v1/users/search", auth, async (req, res) => {
 });
 
 app.get("/v1/conversations", auth, async (req, res) => {
-  const conversations = await Conversation.find({ members: req.auth.sub }).populate("members", "username displayName avatarUrl lastSeenAt").sort({ lastMessageAt: -1 }).limit(100);
-  res.json({ conversations });
+  const conversations = await Conversation.find({ members: req.auth.sub })
+    .populate("members", "username displayName avatarUrl lastSeenAt")
+    .sort({ lastMessageAt: -1 }).limit(100).lean();
+  const latest = conversations.length ? await Message.aggregate([
+    { $match: { conversation: { $in: conversations.map((item) => item._id) } } },
+    { $sort: { sentAt: -1 } },
+    { $group: { _id: "$conversation", message: { $first: "$$ROOT" } } }
+  ]) : [];
+  const latestByConversation = new Map(latest.map((item) => [item._id.toString(), item.message]));
+  res.json({ conversations: conversations.map((item) => ({ ...item, lastMessage: latestByConversation.get(item._id.toString()) || null })) });
 });
 
 app.post("/v1/conversations", auth, async (req, res) => {

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#6d55e7">
+  <meta name="description" content="Mowell Web — your conversations on any screen.">
+  <title>Mowell Web</title>
+  <link rel="icon" href="/mowell_logo.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <svg class="svg-sprite" aria-hidden="true">
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4V4Z"/></symbol>
+    <symbol id="i-call" viewBox="0 0 24 24"><path d="M7 3 4 5c0 8 7 15 15 15l2-3-5-3-2 2c-3-1-5-3-6-6l2-2-3-5Z"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><path d="M3 6h12v12H3V6Zm12 4 6-4v12l-6-4v-4Z"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8-1a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM1 21c0-4 3-7 7-7s7 3 7 7H1Zm13-6c4 0 7 2 8 6h-5c0-2-1-4-3-6Z"/></symbol>
+    <symbol id="i-group" viewBox="0 0 24 24"><path d="M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 0a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM1 21c0-5 3-8 7-8 2 0 4 1 5 3-1 1-2 3-2 5H1Zm11 0c0-5 2-8 6-8s5 3 5 8H12Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m3 4 18 8-18 8 3-8-3-8Zm3 8h15"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8 12 7-7a4 4 0 0 1 6 6L10 22a6 6 0 0 1-8-8L13 3"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="13" rx="4"/><path d="M4 11a8 8 0 0 0 16 0M12 19v3"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3M4 4l2 2M18 18l2 2M20 4l-2 2M6 18l-2 2"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 4-8 8 8 8"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+    <symbol id="i-location" viewBox="0 0 24 24"><path d="M12 22s7-7 7-13a7 7 0 1 0-14 0c0 6 7 13 7 13Z"/><circle cx="12" cy="9" r="2"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H4v16h6M14 8l4 4-4 4M8 12h10"/></symbol>
+  </svg>
+
+  <section id="auth-screen" class="auth-screen">
+    <div class="auth-art">
+      <div class="brand"><img src="/mowell_logo.png" alt="Mowell"><span>Mowell</span></div>
+      <div class="art-copy"><span class="eyebrow">MOWELL WEB</span><h1>Your people.<br>Any screen.</h1><p>Continue conversations, share files, and make calls from a responsive browser experience.</p></div>
+      <div class="art-orbit"><span></span><span></span><span></span></div>
+      <p class="from">from Grapaxels</p>
+    </div>
+    <div class="auth-panel">
+      <form id="login-form" class="auth-card">
+        <div class="mobile-brand"><img src="/mowell_logo.png" alt=""><b>Mowell</b></div>
+        <span class="eyebrow">WELCOME BACK</span>
+        <h2>Sign in to Mowell</h2>
+        <p class="muted">Use the same account as the Android app.</p>
+        <label class="field"><span>Email or username</span><input id="identity" autocomplete="username" required placeholder="you@example.com"></label>
+        <label class="field"><span>Password</span><div class="password-field"><input id="password" type="password" autocomplete="current-password" required placeholder="Your password"><button id="show-password" type="button" class="bare" aria-label="Show password"><svg><use href="#i-eye"/></svg></button></div></label>
+        <div class="form-line"><label class="check"><input id="remember" type="checkbox" checked> Keep me signed in</label><button id="forgot-link" type="button" class="link">Forgot password?</button></div>
+        <button id="login-button" class="primary wide" type="submit"><span>Sign in</span><span class="button-spinner"></span></button>
+        <p id="auth-error" class="form-error" role="alert"></p>
+        <p class="auth-switch">New to Mowell? <button id="show-register" type="button" class="link">Create an account</button></p>
+      </form>
+
+      <form id="register-form" class="auth-card hidden">
+        <button id="back-login" class="back-link" type="button"><svg><use href="#i-back"/></svg> Back to sign in</button>
+        <span class="eyebrow">CREATE ACCOUNT</span><h2>Join Mowell</h2>
+        <div class="two-fields"><label class="field"><span>Name</span><input id="register-name" required maxlength="60"></label><label class="field"><span>Username</span><input id="register-username" required maxlength="24" pattern="[a-z0-9_]{3,24}"></label></div>
+        <label class="field"><span>Email</span><input id="register-email" type="email" required autocomplete="email"></label>
+        <label class="field"><span>Password</span><input id="register-password" type="password" minlength="8" required autocomplete="new-password"></label>
+        <button id="register-button" class="primary wide" type="submit"><span>Create account</span><span class="button-spinner"></span></button>
+        <p id="register-error" class="form-error" role="alert"></p>
+      </form>
+    </div>
+  </section>
+
+  <main id="workspace" class="workspace hidden">
+    <aside class="rail">
+      <button class="rail-logo" data-action="chats" aria-label="Mowell chats"><img src="/mowell_logo.png" alt="Mowell"></button>
+      <nav>
+        <button class="nav-button active" data-view="chats"><svg><use href="#i-chat"/></svg><span>Chats</span></button>
+        <button class="nav-button" data-view="calls"><svg><use href="#i-call"/></svg><span>Calls</span></button>
+        <button class="nav-button" data-view="people"><svg><use href="#i-users"/></svg><span>People</span></button>
+        <button class="nav-button" data-view="groups"><svg><use href="#i-group"/></svg><span>Groups</span></button>
+      </nav>
+      <div class="rail-bottom">
+        <button id="theme-toggle" class="nav-button"><svg class="moon"><use href="#i-moon"/></svg><svg class="sun"><use href="#i-sun"/></svg><span>Theme</span></button>
+        <button id="account-button" class="account-avatar" aria-label="Account">M</button>
+      </div>
+    </aside>
+
+    <section id="list-pane" class="list-pane">
+      <header class="pane-header"><div><span class="eyebrow">MOWELL WEB</span><h2 id="view-title">Chats</h2></div><button id="new-button" class="icon-button accent" title="New conversation"><svg><use href="#i-plus"/></svg></button></header>
+      <label class="search-box"><svg><use href="#i-search"/></svg><input id="search-input" autocomplete="off" placeholder="Search conversations"></label>
+      <div id="filter-row" class="filter-row"><button class="chip active" data-filter="all">All</button><button class="chip" data-filter="direct">Direct</button><button class="chip" data-filter="groups">Groups</button></div>
+      <div id="list" class="conversation-list" aria-live="polite"></div>
+    </section>
+
+    <section id="empty-pane" class="empty-pane">
+      <div class="empty-visual"><img src="/mowell_logo.png" alt=""><span></span><span></span></div>
+      <h2>Welcome to Mowell Web</h2><p>Select a conversation or find someone by username.</p>
+      <button id="empty-new" class="primary">Start a conversation</button>
+    </section>
+
+    <section id="chat-pane" class="chat-pane hidden">
+      <header class="chat-header">
+        <button id="chat-back" class="icon-button mobile-back"><svg><use href="#i-back"/></svg></button>
+        <div id="chat-avatar" class="avatar">M</div><div class="chat-heading"><h3 id="chat-title">Mowell</h3><p id="chat-status">Online</p></div>
+        <div class="chat-actions"><button id="audio-call" class="icon-button" title="Voice call"><svg><use href="#i-call"/></svg></button><button id="video-call" class="icon-button" title="Video call"><svg><use href="#i-video"/></svg></button><button id="chat-more" class="icon-button" title="Conversation details"><svg><use href="#i-more"/></svg></button></div>
+      </header>
+      <div id="messages" class="messages"></div>
+      <div id="typing-indicator" class="typing-indicator hidden"><span></span><span></span><span></span><b>typing</b></div>
+      <div id="reply-bar" class="reply-bar hidden"><div><b>Replying to</b><span id="reply-text"></span></div><button id="cancel-reply" class="icon-button"><svg><use href="#i-close"/></svg></button></div>
+      <footer class="composer">
+        <button id="attach-button" class="icon-button" title="Attach file"><svg><use href="#i-paperclip"/></svg></button><input id="file-input" type="file" hidden>
+        <textarea id="message-input" rows="1" placeholder="Message" maxlength="8000"></textarea>
+        <button id="location-button" class="icon-button optional-action" title="Share location"><svg><use href="#i-location"/></svg></button>
+        <button id="record-button" class="icon-button record-button" title="Record voice message"><svg><use href="#i-mic"/></svg><span class="record-time"></span></button>
+        <button id="send-button" class="send-button hidden" title="Send"><svg><use href="#i-send"/></svg></button>
+      </footer>
+    </section>
+  </main>
+
+  <dialog id="verify-dialog" class="modal"><form id="verify-form" method="dialog"><span class="eyebrow">EMAIL VERIFICATION</span><h2>Enter your code</h2><p id="verify-copy" class="muted"></p><input id="verify-email" type="hidden"><label class="field"><span>Six-digit code</span><input id="verify-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" required placeholder="000000"></label><button id="verify-button" class="primary wide" value="default"><span>Verify email</span><span class="button-spinner"></span></button><button id="resend-code" class="link dialog-link" type="button">Send a new code</button><p id="verify-error" class="form-error"></p></form></dialog>
+
+  <dialog id="reset-dialog" class="modal"><form id="reset-form" method="dialog"><button class="dialog-close icon-button" type="button" data-close="reset-dialog"><svg><use href="#i-close"/></svg></button><span class="eyebrow">ACCOUNT RECOVERY</span><h2>Reset password</h2><p class="muted">Request a code, then choose a new password.</p><label class="field"><span>Email</span><input id="reset-email" type="email" required></label><button id="request-reset" class="secondary wide" type="button">Send reset code</button><label class="field"><span>Reset code</span><input id="reset-code" inputmode="numeric" maxlength="6" required></label><label class="field"><span>New password</span><input id="reset-password" type="password" minlength="8" required></label><button id="reset-button" class="primary wide" value="default"><span>Update password</span><span class="button-spinner"></span></button><p id="reset-error" class="form-error"></p></form></dialog>
+
+  <dialog id="new-dialog" class="modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="new-dialog"><svg><use href="#i-close"/></svg></button><span class="eyebrow">NEW CONVERSATION</span><h2>Connect with people</h2><label class="search-box modal-search"><svg><use href="#i-search"/></svg><input id="people-search" autocomplete="off" placeholder="Search exact username"></label><div id="people-results" class="people-results"><p class="empty-copy">Type at least two characters.</p></div><button id="open-group" class="secondary wide" type="button"><svg><use href="#i-group"/></svg>Create a group</button></form></dialog>
+
+  <dialog id="group-dialog" class="modal"><form id="group-form" method="dialog"><button class="dialog-close icon-button" type="button" data-close="group-dialog"><svg><use href="#i-close"/></svg></button><span class="eyebrow">NEW GROUP</span><h2>Create a group</h2><label class="field"><span>Group name</span><input id="group-name" maxlength="80" required></label><p class="field-caption">Select people already visible in your conversations.</p><div id="group-members" class="member-list"></div><button id="create-group" class="primary wide" value="default"><span>Create group</span><span class="button-spinner"></span></button><p id="group-error" class="form-error"></p></form></dialog>
+
+  <dialog id="account-dialog" class="modal account-modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="account-dialog"><svg><use href="#i-close"/></svg></button><div id="profile-avatar" class="profile-avatar">M</div><h2 id="profile-name">Mowell user</h2><p id="profile-username" class="muted">@username</p><button id="logout-button" type="button" class="danger wide"><svg><use href="#i-logout"/></svg>Sign out of Mowell Web</button></form></dialog>
+
+  <section id="incoming-call" class="incoming-call hidden">
+    <div class="incoming-card"><div id="incoming-avatar" class="call-avatar">M</div><span id="incoming-kind" class="eyebrow">INCOMING VIDEO CALL</span><h2 id="incoming-name">Mowell user</h2><p>is calling you on Mowell</p><div class="incoming-actions"><button id="decline-call" class="call-action decline"><svg><use href="#i-call"/></svg><span>Decline</span></button><button id="accept-call" class="call-action accept"><svg><use href="#i-video"/></svg><span>Accept</span></button></div></div>
+  </section>
+
+  <section id="call-screen" class="call-screen hidden">
+    <div id="remote-videos" class="remote-videos"><div class="call-waiting"><div class="pulse-avatar" id="call-avatar">M</div><h2 id="call-name">Mowell user</h2><p id="call-status">Connecting…</p></div></div>
+    <video id="local-video" class="local-video" autoplay muted playsinline></video>
+    <div class="call-top"><span id="call-timer">00:00</span></div>
+    <div class="call-controls"><button id="mute-call" class="control-button"><svg><use href="#i-mic"/></svg><span>Mute</span></button><button id="camera-call" class="control-button"><svg><use href="#i-video"/></svg><span>Camera</span></button><button id="hangup-call" class="control-button hangup"><svg><use href="#i-call"/></svg><span>End</span></button></div>
+  </section>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+</body>
+</html>

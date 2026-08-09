@@ -1,0 +1,753 @@
+const $ = (id) => document.getElementById(id);
+const API = location.hostname === 'mowellweb.grapaxels.in' ? 'https://mowell-api.grapaxels.in' : location.origin;
+const state = {
+  token: localStorage.getItem('mowell_web_token') || sessionStorage.getItem('mowell_web_token'),
+  me: null,
+  conversations: [],
+  active: null,
+  messages: [],
+  view: 'chats',
+  filter: 'all',
+  reply: null,
+  incoming: null,
+  knownUpdates: new Map(),
+  initialized: false,
+  polling: false,
+  mediaUrls: new Set()
+};
+
+const call = {
+  room: '', conversation: null, video: false, stream: null, peers: new Map(),
+  lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null
+};
+
+const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+}[char]));
+const uuid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const absolute = (url) => !url ? '' : url.startsWith('/') ? `${API}${url}` : url;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function api(path, options = {}) {
+  const headers = { ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(options.headers || {}) };
+  if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+  const response = await fetch(`${API}${path}`, { ...options, headers });
+  if (options.blob) {
+    if (!response.ok) throw new Error('Could not download this attachment');
+    return response.blob();
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error || `Request failed (${response.status})`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+function setLoading(button, active) {
+  button?.classList.toggle('loading', active);
+  if (button) button.disabled = active;
+}
+
+function toast(message) {
+  $('toast').textContent = message;
+  $('toast').classList.remove('hidden');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => $('toast').classList.add('hidden'), 3200);
+}
+
+function setError(id, message = '') { $(id).textContent = message; }
+function userId(user) { return String(user?._id || user?.id || user || ''); }
+function senderId(message) { return userId(message?.sender); }
+function conversationId(conversation) { return String(conversation?._id || conversation?.id || ''); }
+function otherMember(conversation) { return (conversation?.members || []).find((member) => userId(member) !== state.me?.id); }
+function displayTitle(conversation) {
+  if (!conversation) return 'Mowell';
+  if (conversation.isGroup) return conversation.title || 'Mowell group';
+  const other = otherMember(conversation);
+  return other?.displayName || other?.username || conversation.title || 'Mowell user';
+}
+function avatarUrl(conversation) { return conversation?.isGroup ? conversation.avatarUrl : otherMember(conversation)?.avatarUrl; }
+function avatarMarkup(name, url) {
+  return url ? `<img src="${escapeHtml(absolute(url))}" alt="">` : escapeHtml((name || 'M').trim()[0]?.toUpperCase() || 'M');
+}
+function formatTime(value) { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+function formatListTime(value) {
+  const date = new Date(value), now = new Date();
+  if (date.toDateString() === now.toDateString()) return formatTime(value);
+  if (date.getFullYear() === now.getFullYear()) return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
+}
+function dayLabel(value) {
+  const date = new Date(value), today = new Date(), yesterday = new Date(Date.now() - 86400000);
+  if (date.toDateString() === today.toDateString()) return 'Today';
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+}
+function preview(message) {
+  if (!message) return 'Start a conversation';
+  const map = { image: 'Photo', video: 'Video', audio: 'Voice message', file: message.attachment?.fileName || message.body || 'Document', location: 'Location', contact: 'Contact', call: 'Incoming call', call_end: 'Call ended' };
+  return map[message.kind] || message.body || 'Message';
+}
+
+function saveSession(token, remember = true) {
+  localStorage.removeItem('mowell_web_token');
+  sessionStorage.removeItem('mowell_web_token');
+  (remember ? localStorage : sessionStorage).setItem('mowell_web_token', token);
+  state.token = token;
+}
+
+function clearSession() {
+  localStorage.removeItem('mowell_web_token');
+  sessionStorage.removeItem('mowell_web_token');
+  state.token = null;
+  state.me = null;
+  state.active = null;
+  state.conversations = [];
+  $('workspace').classList.add('hidden');
+  $('auth-screen').classList.remove('hidden');
+  $('account-dialog').close();
+}
+
+function maskEmail(email) {
+  const [name = '', domain = ''] = String(email).split('@');
+  const visibleName = name.slice(0, 2);
+  const domainParts = domain.split('.');
+  const suffix = domainParts.length > 1 ? `.${domainParts.pop()}` : '';
+  return `${visibleName}${'*'.repeat(Math.max(4, name.length - 2))}@${'*'.repeat(Math.max(2, domainParts.join('.').length))}${suffix}`;
+}
+
+async function login(event) {
+  event.preventDefault();
+  setError('auth-error');
+  setLoading($('login-button'), true);
+  try {
+    const data = await api('/v1/auth/login', { method: 'POST', body: JSON.stringify({ identity: $('identity').value.trim(), password: $('password').value }) });
+    saveSession(data.token, $('remember').checked);
+    state.me = data.user;
+    await enterWorkspace();
+  } catch (error) {
+    if (error.payload?.verificationRequired) openVerification(error.payload.email);
+    else setError('auth-error', error.message);
+  } finally { setLoading($('login-button'), false); }
+}
+
+async function register(event) {
+  event.preventDefault();
+  setError('register-error');
+  setLoading($('register-button'), true);
+  const email = $('register-email').value.trim();
+  try {
+    await api('/v1/auth/register', { method: 'POST', body: JSON.stringify({
+      displayName: $('register-name').value.trim(), username: $('register-username').value.trim().toLowerCase(),
+      email, password: $('register-password').value
+    }) });
+    openVerification(email);
+  } catch (error) {
+    if (error.payload?.verificationRequired) openVerification(error.payload.email || email);
+    setError('register-error', error.message);
+  } finally { setLoading($('register-button'), false); }
+}
+
+function openVerification(email) {
+  $('verify-email').value = email;
+  $('verify-copy').textContent = `Enter the code sent to ${maskEmail(email)}.`;
+  setError('verify-error');
+  $('verify-dialog').showModal();
+}
+
+async function verifyEmail(event) {
+  event.preventDefault();
+  setLoading($('verify-button'), true);
+  setError('verify-error');
+  try {
+    const data = await api('/v1/auth/verify-email', { method: 'POST', body: JSON.stringify({ email: $('verify-email').value, code: $('verify-code').value.trim() }) });
+    saveSession(data.token, true);
+    state.me = data.user;
+    $('verify-dialog').close();
+    await enterWorkspace();
+  } catch (error) { setError('verify-error', error.message); }
+  finally { setLoading($('verify-button'), false); }
+}
+
+async function requestReset() {
+  setError('reset-error');
+  setLoading($('request-reset'), true);
+  try {
+    const data = await api('/v1/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email: $('reset-email').value.trim() }) });
+    toast(data.message || 'Reset code sent');
+  } catch (error) { setError('reset-error', error.message); }
+  finally { setLoading($('request-reset'), false); }
+}
+
+async function resetPassword(event) {
+  event.preventDefault();
+  setError('reset-error');
+  setLoading($('reset-button'), true);
+  try {
+    const data = await api('/v1/auth/reset-password', { method: 'POST', body: JSON.stringify({ email: $('reset-email').value.trim(), code: $('reset-code').value.trim(), password: $('reset-password').value }) });
+    $('reset-dialog').close(); toast(data.message || 'Password updated');
+  } catch (error) { setError('reset-error', error.message); }
+  finally { setLoading($('reset-button'), false); }
+}
+
+async function boot() {
+  document.body.classList.toggle('dark', localStorage.getItem('mowell_web_theme') === 'dark');
+  if (!state.token) return;
+  try {
+    state.me = (await api('/v1/me')).user;
+    await enterWorkspace();
+  } catch { clearSession(); }
+}
+
+async function enterWorkspace() {
+  $('auth-screen').classList.add('hidden');
+  $('workspace').classList.remove('hidden');
+  const name = state.me.displayName || state.me.username;
+  const markup = avatarMarkup(name, state.me.avatarUrl);
+  $('account-button').innerHTML = markup;
+  $('profile-avatar').innerHTML = markup;
+  $('profile-name').textContent = name;
+  $('profile-username').textContent = `@${state.me.username}`;
+  state.initialized = false;
+  await loadConversations();
+  state.initialized = true;
+  setView('chats');
+  startPolling();
+}
+
+async function loadConversations() {
+  const data = await api('/v1/conversations');
+  const incoming = data.conversations || [];
+  const changed = [];
+  for (const conversation of incoming) {
+    conversation._lastMessage = conversation.lastMessage || conversation._lastMessage || null;
+    const id = conversationId(conversation);
+    const stamp = new Date(conversation.lastMessageAt || conversation.updatedAt || 0).getTime();
+    const previous = state.knownUpdates.get(id);
+    state.knownUpdates.set(id, stamp);
+    if (state.initialized && (!previous || stamp > previous)) changed.push(conversation);
+  }
+  state.conversations = incoming;
+  renderList();
+  if (state.active) state.active = incoming.find((item) => conversationId(item) === conversationId(state.active)) || state.active;
+  for (const conversation of changed) await inspectLatest(conversation);
+}
+
+async function inspectLatest(conversation) {
+  try {
+    const data = await api(`/v1/conversations/${conversationId(conversation)}/messages`);
+    const latest = (data.messages || []).at(-1);
+    if (!latest || senderId(latest) === state.me.id || latest.kind !== 'call') return;
+    const body = JSON.parse(latest.body || '{}');
+    if (body.room && body.room !== state.incoming?.data?.room && call.closed) showIncoming(conversation, latest, body);
+    if (state.active && conversationId(state.active) === conversationId(conversation)) {
+      state.messages = data.messages || [];
+      renderMessages(false);
+    }
+  } catch { /* Polling retries on the next update. */ }
+}
+
+function setView(view) {
+  state.view = view;
+  document.querySelectorAll('.nav-button[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
+  const titles = { chats: ['Chats', 'Search conversations'], calls: ['Calls', 'Search call history'], people: ['People', 'Search username'], groups: ['Groups', 'Search groups'] };
+  $('view-title').textContent = titles[view][0];
+  $('search-input').placeholder = titles[view][1];
+  $('filter-row').classList.toggle('hidden', view !== 'chats');
+  $('new-button').title = view === 'groups' ? 'Create group' : 'New conversation';
+  $('search-input').value = '';
+  renderList();
+}
+
+function conversationRow(conversation) {
+  const id = conversationId(conversation), title = displayTitle(conversation), active = conversationId(state.active) === id;
+  const last = conversation._lastMessage;
+  return `<button class="conversation-row ${active ? 'active' : ''}" data-conversation="${escapeHtml(id)}">
+    <span class="avatar ${conversation.isGroup ? 'group' : ''}">${avatarMarkup(title, avatarUrl(conversation))}</span>
+    <span class="row-copy"><strong>${escapeHtml(title)}${conversation.isGroup ? '<span class="group-tag">Group</span>' : ''}</strong><span>${escapeHtml(preview(last))}</span></span>
+    <span class="row-meta">${formatListTime(conversation.lastMessageAt || conversation.updatedAt || Date.now())}</span>
+  </button>`;
+}
+
+async function renderList() {
+  const query = $('search-input').value.trim().toLowerCase();
+  if (state.view === 'people') return renderPeople(query);
+  let list = [...state.conversations];
+  if (state.view === 'groups') list = list.filter((item) => item.isGroup);
+  if (state.view === 'calls') list = list.filter((item) => ['call', 'call_end'].includes(item._lastMessage?.kind));
+  if (state.view === 'chats' && state.filter === 'direct') list = list.filter((item) => !item.isGroup);
+  if (state.view === 'chats' && state.filter === 'groups') list = list.filter((item) => item.isGroup);
+  if (query) list = list.filter((item) => displayTitle(item).toLowerCase().includes(query));
+  $('list').innerHTML = list.length ? list.map(conversationRow).join('') : `<div class="list-empty"><div><svg><use href="#i-${state.view === 'groups' ? 'group' : state.view === 'calls' ? 'call' : 'chat'}"/></svg><p>No ${escapeHtml(state.view)} found.</p></div></div>`;
+  document.querySelectorAll('[data-conversation]').forEach((button) => button.onclick = () => openConversation(state.conversations.find((item) => conversationId(item) === button.dataset.conversation)));
+}
+
+async function renderPeople(query) {
+  if (query.length < 2) {
+    $('list').innerHTML = '<div class="list-empty"><div><svg><use href="#i-search"/></svg><p>Search by username to find someone.</p></div></div>';
+    return;
+  }
+  $('list').innerHTML = '<div class="list-empty"><div class="button-spinner"></div></div>';
+  try {
+    const users = (await api(`/v1/users/search?q=${encodeURIComponent(query)}`)).users || [];
+    $('list').innerHTML = users.length ? users.map((user) => `<button class="conversation-row person-open" data-user="${escapeHtml(user.id)}"><span class="avatar">${avatarMarkup(user.displayName, user.avatarUrl)}</span><span class="row-copy"><strong>${escapeHtml(user.displayName)}</strong><span>@${escapeHtml(user.username)}</span></span><span class="row-meta">Chat</span></button>`).join('') : '<div class="list-empty"><p>No username matched.</p></div>';
+    document.querySelectorAll('.person-open').forEach((button) => button.onclick = () => createDirect(users.find((user) => user.id === button.dataset.user)));
+  } catch (error) { $('list').innerHTML = `<div class="list-empty"><p>${escapeHtml(error.message)}</p></div>`; }
+}
+
+async function createDirect(user) {
+  if (!user) return;
+  try {
+    const data = await api('/v1/conversations', { method: 'POST', body: JSON.stringify({ memberIds: [user.id] }) });
+    await loadConversations();
+    const id = conversationId(data.conversation);
+    const conversation = state.conversations.find((item) => conversationId(item) === id) || data.conversation;
+    $('new-dialog').close();
+    await openConversation(conversation);
+  } catch (error) { toast(error.message); }
+}
+
+async function openConversation(conversation) {
+  if (!conversation) return;
+  state.active = conversation;
+  const title = displayTitle(conversation);
+  $('chat-title').textContent = title;
+  $('chat-status').textContent = conversation.isGroup ? `${conversation.members?.length || 0} members` : 'Mowell conversation';
+  $('chat-avatar').classList.toggle('group', Boolean(conversation.isGroup));
+  $('chat-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation));
+  $('empty-pane').classList.add('hidden');
+  $('chat-pane').classList.remove('hidden');
+  renderList();
+  await loadMessages();
+  $('message-input').focus();
+}
+
+async function loadMessages({ preserve = false } = {}) {
+  if (!state.active) return;
+  try {
+    const data = await api(`/v1/conversations/${conversationId(state.active)}/messages`);
+    const before = state.messages.at(-1)?._id;
+    state.messages = data.messages || [];
+    state.active._lastMessage = state.messages.at(-1);
+    renderMessages(preserve && before === state.messages.at(-1)?._id);
+    renderList();
+  } catch (error) { toast(error.message); }
+}
+
+function parseBody(message) {
+  if (!['location', 'contact', 'call', 'call_end'].includes(message.kind)) return { text: message.body };
+  try { return JSON.parse(message.body); } catch { return { text: message.body }; }
+}
+
+function mediaMarkup(message) {
+  const attachment = message.attachment;
+  const id = userId(attachment?._id || attachment);
+  const mime = attachment?.mimeType || '';
+  if (!id) return `<p class="message-text">${escapeHtml(message.body)}</p>`;
+  if (message.kind === 'image') return `<button class="media-loader" data-media="${escapeHtml(id)}" data-kind="image" aria-label="Open photo"><span>Loading photo…</span></button>`;
+  if (message.kind === 'video') return `<div class="media-loader" data-media="${escapeHtml(id)}" data-kind="video"><span>Loading video…</span></div>`;
+  if (message.kind === 'audio') return `<div class="media-loader" data-media="${escapeHtml(id)}" data-kind="audio"><span>Loading voice message…</span></div>`;
+  return `<a class="file-card media-loader" data-media="${escapeHtml(id)}" data-kind="file" data-name="${escapeHtml(attachment?.fileName || message.body || 'Document')}" href="#"><svg><use href="#i-paperclip"/></svg><span>${escapeHtml(attachment?.fileName || message.body || 'Document')}</span></a>`;
+}
+
+function contentMarkup(message) {
+  const data = parseBody(message);
+  if (['image', 'video', 'audio', 'file'].includes(message.kind)) return mediaMarkup(message);
+  if (message.kind === 'location') {
+    const lat = Number(data.latitude), lon = Number(data.longitude);
+    return `<a class="location-card" href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" rel="noopener"><span class="location-map"><svg><use href="#i-location"/></svg></span><b>Shared location</b></a>`;
+  }
+  if (message.kind === 'contact') return `<div class="file-card"><svg><use href="#i-users"/></svg><span><b>${escapeHtml(data.name || 'Contact')}</b><br>${escapeHtml(data.number || '')}</span></div>`;
+  if (message.kind === 'call') return `<p class="message-text">${data.video ? 'Video' : 'Voice'} call started</p>`;
+  if (message.kind === 'call_end') return `<p class="message-text">Call ended${data.reason ? ` · ${escapeHtml(String(data.reason).replaceAll('_', ' '))}` : ''}</p>`;
+  return `${message.reply ? `<div class="reply-quote"><b>${escapeHtml(message.reply.sender || 'Reply')}</b><span>${escapeHtml(message.reply.body || '')}</span></div>` : ''}<p class="message-text">${escapeHtml(message.body)}</p>`;
+}
+
+function renderMessages(preserveScroll = false) {
+  const container = $('messages');
+  const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 110;
+  let previousDay = '';
+  container.innerHTML = state.messages.map((message) => {
+    const date = new Date(message.sentAt || message.createdAt || Date.now()).toDateString();
+    const day = date !== previousDay ? `<div class="day-badge">${escapeHtml(dayLabel(message.sentAt || message.createdAt))}</div>` : '';
+    previousDay = date;
+    const outgoing = senderId(message) === state.me.id;
+    const system = ['call', 'call_end', 'system'].includes(message.kind);
+    const sender = message.sender?.displayName || message.sender?.username || '';
+    return `${day}<div class="message-line ${outgoing ? 'outgoing' : ''} ${system ? 'system' : ''}" data-message="${escapeHtml(message._id || message.id || '')}"><div class="bubble">${state.active?.isGroup && !outgoing && !system ? `<span class="sender-name">${escapeHtml(sender)}</span>` : ''}${contentMarkup(message)}<div class="message-meta"><span>${formatTime(message.sentAt || message.createdAt)}</span>${outgoing && !system ? '<span class="ticks">✓✓</span>' : ''}</div></div></div>`;
+  }).join('') || '<div class="list-empty"><p>No messages yet. Say hello.</p></div>';
+  hydrateMedia();
+  if (!preserveScroll || nearBottom) requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+}
+
+async function hydrateMedia() {
+  for (const element of document.querySelectorAll('.media-loader[data-media]')) {
+    const id = element.dataset.media;
+    element.removeAttribute('data-media');
+    try {
+      const blob = await api(`/v1/attachments/${id}`, { blob: true });
+      const url = URL.createObjectURL(blob);
+      state.mediaUrls.add(url);
+      if (element.dataset.kind === 'image') {
+        const image = document.createElement('img'); image.className = 'message-media'; image.src = url; image.alt = 'Shared photo';
+        element.replaceWith(image); image.onclick = () => window.open(url, '_blank', 'noopener');
+      } else if (element.dataset.kind === 'video') {
+        const video = document.createElement('video'); video.className = 'message-media'; video.src = url; video.controls = true; video.playsInline = true; element.replaceWith(video);
+      } else if (element.dataset.kind === 'audio') {
+        const audio = document.createElement('audio'); audio.className = 'message-media audio'; audio.src = url; audio.controls = true; element.replaceWith(audio);
+      } else {
+        element.href = url; element.download = element.dataset.name || 'Mowell attachment';
+      }
+    } catch { element.textContent = 'Attachment unavailable'; }
+  }
+}
+
+async function sendMessage(body, kind = 'text') {
+  if (!state.active || !body.trim()) return;
+  const clientId = `web-${uuid()}`;
+  const optimistic = { _id: clientId, clientId, sender: state.me, body: body.trim(), kind, sentAt: new Date().toISOString() };
+  state.messages.push(optimistic);
+  renderMessages();
+  try {
+    await api(`/v1/conversations/${conversationId(state.active)}/messages`, { method: 'POST', body: JSON.stringify({ clientId, body: body.trim(), kind }) });
+    await loadMessages({ preserve: true });
+    await loadConversations();
+  } catch (error) {
+    state.messages = state.messages.filter((message) => message.clientId !== clientId);
+    renderMessages(); toast(error.message);
+  }
+}
+
+async function submitComposer() {
+  const text = $('message-input').value.trim();
+  if (!text) return;
+  $('message-input').value = '';
+  updateComposer();
+  await sendMessage(text);
+  setTyping(false);
+}
+
+async function uploadFile(file) {
+  if (!state.active || !file) return;
+  if (file.size > 2621440) return toast('Attachments must be 2.5 MB or smaller.');
+  toast('Uploading attachment…');
+  try {
+    const data = await fileToBase64(file);
+    await api(`/v1/conversations/${conversationId(state.active)}/attachments`, { method: 'POST', body: JSON.stringify({ clientId: `web-${uuid()}`, fileName: file.name, mimeType: file.type || 'application/octet-stream', data }) });
+    await loadMessages(); await loadConversations();
+  } catch (error) { toast(error.message); }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || ''); reader.onerror = reject; reader.readAsDataURL(file);
+  });
+}
+
+async function shareLocation() {
+  if (!state.active || !navigator.geolocation) return toast('Location is not available in this browser.');
+  toast('Getting your location…');
+  navigator.geolocation.getCurrentPosition(
+    ({ coords }) => sendMessage(JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }), 'location'),
+    () => toast('Allow location permission to share your position.'),
+    { enableHighAccuracy: true, timeout: 12000 }
+  );
+}
+
+let recorder = null, recordChunks = [], recordStarted = 0, recordTimer = null;
+async function toggleRecording() {
+  if (recorder?.state === 'recording') { recorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    recordChunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (event) => { if (event.data.size) recordChunks.push(event.data); };
+    recorder.onstop = async () => {
+      clearInterval(recordTimer); $('record-button').classList.remove('recording'); $('record-button').querySelector('.record-time').textContent = '';
+      stream.getTracks().forEach((track) => track.stop());
+      const type = recorder.mimeType || 'audio/webm';
+      await uploadFile(new File([new Blob(recordChunks, { type })], `mowell_voice_${Date.now()}.webm`, { type }));
+    };
+    recorder.start(250); recordStarted = Date.now(); $('record-button').classList.add('recording');
+    recordTimer = setInterval(() => { $('record-button').querySelector('.record-time').textContent = `${Math.floor((Date.now() - recordStarted) / 1000)}s`; }, 250);
+  } catch { toast('Allow microphone permission to record a voice message.'); }
+}
+
+let typingTimer = null;
+function setTyping(active) {
+  if (!state.active) return;
+  clearTimeout(typingTimer);
+  api(`/v1/conversations/${conversationId(state.active)}/typing`, { method: 'POST', body: JSON.stringify({ active }) }).catch(() => {});
+  if (active) typingTimer = setTimeout(() => setTyping(false), 4500);
+}
+
+async function pollTyping() {
+  if (!state.active) return;
+  try {
+    const data = await api(`/v1/conversations/${conversationId(state.active)}/typing`);
+    const users = data.users || [];
+    $('typing-indicator').classList.toggle('hidden', !users.length);
+    $('typing-indicator').querySelector('b').textContent = users.length ? `${users.join(', ')} typing` : 'typing';
+  } catch { $('typing-indicator').classList.add('hidden'); }
+}
+
+function updateComposer() {
+  const hasText = Boolean($('message-input').value.trim());
+  $('send-button').classList.toggle('hidden', !hasText);
+  $('record-button').classList.toggle('hidden', hasText);
+  $('message-input').style.height = '44px';
+  $('message-input').style.height = `${Math.min(130, $('message-input').scrollHeight)}px`;
+}
+
+async function searchPeopleDialog() {
+  const query = $('people-search').value.trim();
+  if (query.length < 2) { $('people-results').innerHTML = '<p class="empty-copy">Type at least two characters.</p>'; return; }
+  $('people-results').innerHTML = '<p class="empty-copy">Searching…</p>';
+  try {
+    const users = (await api(`/v1/users/search?q=${encodeURIComponent(query)}`)).users || [];
+    $('people-results').innerHTML = users.length ? users.map((user) => `<div class="person-row"><span class="avatar">${avatarMarkup(user.displayName, user.avatarUrl)}</span><div><strong>${escapeHtml(user.displayName)}</strong><small>@${escapeHtml(user.username)}</small></div><button class="secondary dialog-chat" data-user="${escapeHtml(user.id)}">Chat</button></div>`).join('') : '<p class="empty-copy">No user found.</p>';
+    document.querySelectorAll('.dialog-chat').forEach((button) => button.onclick = () => createDirect(users.find((user) => user.id === button.dataset.user)));
+  } catch (error) { $('people-results').innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`; }
+}
+
+function openNewDialog() { $('new-dialog').showModal(); $('people-search').value = ''; searchPeopleDialog(); setTimeout(() => $('people-search').focus(), 50); }
+function knownPeople() {
+  const map = new Map();
+  for (const conversation of state.conversations) for (const member of conversation.members || []) if (userId(member) !== state.me.id) map.set(userId(member), member);
+  return [...map.values()];
+}
+function openGroupDialog() {
+  $('new-dialog').close();
+  const users = knownPeople();
+  $('group-members').innerHTML = users.length ? users.map((user) => `<label class="member-option"><input type="checkbox" value="${escapeHtml(userId(user))}"><span class="avatar">${avatarMarkup(user.displayName, user.avatarUrl)}</span><span><b>${escapeHtml(user.displayName || user.username)}</b><br><small class="muted">@${escapeHtml(user.username || '')}</small></span></label>`).join('') : '<p class="empty-copy">Start a direct conversation before creating a group.</p>';
+  $('group-dialog').showModal();
+}
+
+async function createGroup(event) {
+  event.preventDefault();
+  const memberIds = [...document.querySelectorAll('#group-members input:checked')].map((input) => input.value);
+  if (!memberIds.length) return setError('group-error', 'Select at least one person.');
+  setLoading($('create-group'), true); setError('group-error');
+  try {
+    const data = await api('/v1/conversations', { method: 'POST', body: JSON.stringify({ title: $('group-name').value.trim(), memberIds, isGroup: true }) });
+    $('group-dialog').close(); await loadConversations();
+    await openConversation(state.conversations.find((item) => conversationId(item) === conversationId(data.conversation)) || data.conversation);
+  } catch (error) { setError('group-error', error.message); }
+  finally { setLoading($('create-group'), false); }
+}
+
+async function callSignal(type, payload = {}, target = null) {
+  return api(`/v1/calls/${encodeURIComponent(call.room)}/signals`, { method: 'POST', body: JSON.stringify({ type, payload, target }) });
+}
+
+async function makePeer(id, name, shouldOffer) {
+  if (call.peers.has(id)) return call.peers.get(id);
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }], iceCandidatePoolSize: 4 });
+  const remote = new MediaStream();
+  const entry = { id, name, pc, remote, pending: [] };
+  call.peers.set(id, entry);
+  call.stream?.getTracks().forEach((track) => pc.addTrack(track, call.stream));
+  pc.ontrack = (event) => {
+    if (!remote.getTracks().some((track) => track.id === event.track.id)) remote.addTrack(event.track);
+    let video = document.getElementById(`remote-${id}`);
+    if (!video) {
+      video = document.createElement('video'); video.id = `remote-${id}`; video.autoplay = true; video.playsInline = true;
+      $('remote-videos').append(video);
+    }
+    video.srcObject = remote; video.play().catch(() => {});
+    $('call-status').textContent = call.video ? 'Video connected' : 'Call connected';
+  };
+  pc.onicecandidate = (event) => { if (event.candidate) callSignal('ice', event.candidate.toJSON(), id).catch(() => {}); };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') $('call-status').textContent = call.video ? 'Video connected' : 'Call connected';
+    if (['failed', 'disconnected'].includes(pc.connectionState)) $('call-status').textContent = 'Reconnecting…';
+  };
+  if (shouldOffer) await sendOffer(entry);
+  return entry;
+}
+
+async function sendOffer(entry) {
+  if (entry.pc.signalingState !== 'stable') return;
+  await entry.pc.setLocalDescription(await entry.pc.createOffer());
+  await callSignal('offer', { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp }, entry.id);
+}
+
+async function receiveSignal(signal) {
+  if (signal.senderId === state.me.id) return;
+  if (signal.type === 'join') {
+    await makePeer(signal.senderId, signal.senderName, state.me.id.localeCompare(signal.senderId) < 0);
+  } else if (signal.type === 'offer') {
+    const peer = await makePeer(signal.senderId, signal.senderName, false);
+    if (peer.pc.signalingState === 'have-local-offer') await peer.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
+    if (peer.pc.signalingState !== 'stable') return;
+    await peer.pc.setRemoteDescription(signal.payload);
+    for (const candidate of peer.pending.splice(0)) await peer.pc.addIceCandidate(candidate).catch(() => {});
+    await peer.pc.setLocalDescription(await peer.pc.createAnswer());
+    await callSignal('answer', { type: peer.pc.localDescription.type, sdp: peer.pc.localDescription.sdp }, signal.senderId);
+  } else if (signal.type === 'answer') {
+    const peer = await makePeer(signal.senderId, signal.senderName, false);
+    if (peer.pc.signalingState === 'have-local-offer') {
+      await peer.pc.setRemoteDescription(signal.payload);
+      for (const candidate of peer.pending.splice(0)) await peer.pc.addIceCandidate(candidate).catch(() => {});
+    }
+  } else if (signal.type === 'ice') {
+    const peer = await makePeer(signal.senderId, signal.senderName, false);
+    if (peer.pc.remoteDescription) await peer.pc.addIceCandidate(signal.payload).catch(() => {});
+    else peer.pending.push(signal.payload);
+  } else if (signal.type === 'leave') {
+    removePeer(signal.senderId);
+    if (!call.conversation?.isGroup) endCall(false);
+  } else if (signal.type === 'media') {
+    call.video = Boolean(signal.payload?.video);
+  }
+}
+
+async function pollCall() {
+  while (!call.closed) {
+    try {
+      const suffix = call.lastId ? `?afterId=${encodeURIComponent(call.lastId)}` : '';
+      const data = await api(`/v1/calls/${encodeURIComponent(call.room)}/signals${suffix}`);
+      for (const signal of data.signals || []) { await receiveSignal(signal); call.lastId = signal.id; }
+    } catch (error) {
+      if ([404, 410].includes(error.status)) { endCall(false); return; }
+    }
+    await sleep(180);
+  }
+}
+
+function removePeer(id) { const peer = call.peers.get(id); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); }
+function showIncoming(conversation, message, data) {
+  state.incoming = { conversation, message, data };
+  const title = displayTitle(conversation);
+  $('incoming-name').textContent = title;
+  $('incoming-kind').textContent = `INCOMING ${data.video ? 'VIDEO' : 'VOICE'} CALL`;
+  $('incoming-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation));
+  $('accept-call').querySelector('use').setAttribute('href', data.video ? '#i-video' : '#i-call');
+  $('incoming-call').classList.remove('hidden');
+}
+
+async function startCall(video) {
+  if (!state.active || !call.closed) return;
+  const room = `Mowell-Web-${uuid().replaceAll('-', '')}`;
+  await openCall({ room, conversation: state.active, video, initiator: true });
+}
+
+async function joinCallRoom(room, conversation, video, initiator) {
+  let lastError;
+  const attempts = initiator ? 1 : 7;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await api(`/v1/calls/${encodeURIComponent(room)}/join`, { method: 'POST', body: JSON.stringify({ conversationId: conversationId(conversation), video, initiator }) });
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) await sleep(500);
+    }
+  }
+  throw lastError;
+}
+
+async function openCall({ room, conversation, video, initiator }) {
+  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.peers.clear();
+  $('incoming-call').classList.add('hidden'); $('call-screen').classList.remove('hidden');
+  const title = displayTitle(conversation);
+  $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
+  try {
+    call.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false });
+    $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video);
+    await joinCallRoom(room, conversation, video, initiator);
+    if (initiator) await sendMessage(JSON.stringify({ room, video, group: Boolean(conversation.isGroup) }), 'call');
+    call.startedAt = Date.now(); updateCallTimer(); call.timer = setInterval(updateCallTimer, 1000);
+    pollCall(); await callSignal('join', { video });
+    $('call-status').textContent = 'Call connected — waiting for the other person';
+  } catch (error) {
+    toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone permission to make calls.' : error.message);
+    await endCall(false);
+  }
+}
+
+function updateCallTimer() {
+  const seconds = Math.max(0, Math.floor((Date.now() - call.startedAt) / 1000));
+  $('call-timer').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+async function endCall(notify = true) {
+  if (call.closed) return;
+  const room = call.room;
+  call.closed = true; clearInterval(call.timer);
+  if (notify) await callSignal('leave', { reason: 'ended' }).catch(() => {});
+  call.stream?.getTracks().forEach((track) => track.stop());
+  call.peers.forEach((peer) => peer.pc.close()); call.peers.clear();
+  $('remote-videos').querySelectorAll('video').forEach((video) => video.remove());
+  $('local-video').srcObject = null; $('call-screen').classList.add('hidden');
+  if (state.incoming?.data?.room === room) state.incoming = null;
+  if (state.active) loadMessages({ preserve: true }).catch(() => {});
+}
+
+function toggleMute() {
+  const track = call.stream?.getAudioTracks()[0]; if (!track) return;
+  track.enabled = !track.enabled; $('mute-call').classList.toggle('off', !track.enabled); $('mute-call').querySelector('span').textContent = track.enabled ? 'Mute' : 'Unmute';
+}
+function toggleCamera() {
+  const track = call.stream?.getVideoTracks()[0]; if (!track) return toast('This is a voice call.');
+  track.enabled = !track.enabled; $('camera-call').classList.toggle('off', !track.enabled); $('camera-call').querySelector('span').textContent = track.enabled ? 'Camera' : 'Start video';
+  callSignal('media', { video: track.enabled }).catch(() => {});
+}
+
+function startPolling() {
+  if (state.polling) return;
+  state.polling = true;
+  (async () => {
+    while (state.token) {
+      try { await loadConversations(); if (state.active) { await loadMessages({ preserve: true }); await pollTyping(); } }
+      catch (error) { if (error.status === 401) { clearSession(); break; } }
+      await sleep(document.hidden ? 7000 : 2400);
+    }
+    state.polling = false;
+  })();
+}
+
+$('login-form').addEventListener('submit', login);
+$('register-form').addEventListener('submit', register);
+$('verify-form').addEventListener('submit', verifyEmail);
+$('reset-form').addEventListener('submit', resetPassword);
+$('group-form').addEventListener('submit', createGroup);
+$('show-password').onclick = () => { const input = $('password'); input.type = input.type === 'password' ? 'text' : 'password'; };
+$('show-register').onclick = () => { $('login-form').classList.add('hidden'); $('register-form').classList.remove('hidden'); };
+$('back-login').onclick = () => { $('register-form').classList.add('hidden'); $('login-form').classList.remove('hidden'); };
+$('forgot-link').onclick = () => $('reset-dialog').showModal();
+$('request-reset').onclick = requestReset;
+$('resend-code').onclick = async () => { try { await api('/v1/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email: $('verify-email').value }) }); toast('A new code was requested.'); } catch (error) { setError('verify-error', error.message); } };
+document.querySelectorAll('[data-close]').forEach((button) => button.onclick = () => $(button.dataset.close).close());
+document.querySelectorAll('.nav-button[data-view]').forEach((button) => button.onclick = () => setView(button.dataset.view));
+$('theme-toggle').onclick = () => { document.body.classList.toggle('dark'); localStorage.setItem('mowell_web_theme', document.body.classList.contains('dark') ? 'dark' : 'light'); };
+$('account-button').onclick = () => $('account-dialog').showModal();
+$('logout-button').onclick = () => clearSession();
+$('new-button').onclick = () => state.view === 'groups' ? openGroupDialog() : openNewDialog();
+$('empty-new').onclick = openNewDialog;
+$('open-group').onclick = openGroupDialog;
+$('search-input').addEventListener('input', renderList);
+$('people-search').addEventListener('input', () => { clearTimeout(searchPeopleDialog.timer); searchPeopleDialog.timer = setTimeout(searchPeopleDialog, 280); });
+document.querySelectorAll('.chip').forEach((button) => button.onclick = () => { state.filter = button.dataset.filter; document.querySelectorAll('.chip').forEach((item) => item.classList.toggle('active', item === button)); renderList(); });
+$('chat-back').onclick = () => { $('chat-pane').classList.add('hidden'); state.active = null; renderList(); };
+$('send-button').onclick = submitComposer;
+$('message-input').addEventListener('input', () => { updateComposer(); setTyping(Boolean($('message-input').value.trim())); });
+$('message-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitComposer(); } });
+$('attach-button').onclick = () => $('file-input').click();
+$('file-input').onchange = () => { uploadFile($('file-input').files[0]); $('file-input').value = ''; };
+$('location-button').onclick = shareLocation;
+$('record-button').onclick = toggleRecording;
+$('cancel-reply').onclick = () => { state.reply = null; $('reply-bar').classList.add('hidden'); };
+$('audio-call').onclick = () => startCall(false);
+$('video-call').onclick = () => startCall(true);
+$('decline-call').onclick = async () => { if (state.incoming) { call.room = state.incoming.data.room; call.closed = false; await callSignal('leave', { reason: 'declined' }).catch(() => {}); call.closed = true; } $('incoming-call').classList.add('hidden'); state.incoming = null; };
+$('accept-call').onclick = () => { if (!state.incoming) return; const incoming = state.incoming; openCall({ room: incoming.data.room, conversation: incoming.conversation, video: Boolean(incoming.data.video), initiator: false }); };
+$('hangup-call').onclick = () => endCall(true);
+$('mute-call').onclick = toggleMute;
+$('camera-call').onclick = toggleCamera;
+window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
+
+boot();
