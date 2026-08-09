@@ -12,14 +12,7 @@ data class MessageEntity(
     val kind: String = "text",
     val attachmentId: String? = null,
     val attachmentMime: String? = null,
-    val attachmentName: String? = null,
-    val editedAt: Long = 0L,
-    val replyToId: String? = null,
-    val threadRootId: String? = null,
-    /** JSON object containing emoji -> count for compact offline rendering. */
-    val reactions: String = "{}",
-    /** Type-specific JSON for polls, links, stickers and collaborative items. */
-    val metadata: String = "{}"
+    val attachmentName: String? = null
 )
 
 data class ConversationEntity(
@@ -32,13 +25,7 @@ data class ConversationEntity(
     val avatarUrl: String? = null,
     val lastSeenAt: Long = 0L,
     val members: String = "",
-    val unreadCount: Int = 0,
-    val blocked: Boolean = false,
-    val blockedByMe: Boolean = false,
-    /** Local-only: hidden conversation tiles stay hidden until a newer incoming message arrives. */
-    val hiddenAt: Long = 0L,
-    /** A personal contact label. It is stored only in this phone's SQLite database. */
-    val localTitle: String? = null
+    val unreadCount: Int = 0
 )
 
 data class CachedUser(
@@ -46,10 +33,4 @@ data class CachedUser(
     val username: String,
     val displayName: String,
     val avatarUrl: String?
-)
-
-data class ChatListEntity(
-    val id: String,
-    val name: String,
-    val conversationIds: Set<String>
 )

@@ -7,32 +7,15 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
-import java.util.UUID
 
 class MowellDao(private val db: () -> SQLiteDatabase) {
     private val conversations = MutableStateFlow(loadConversations())
-    private val chatLists = MutableStateFlow(loadChatLists())
     private val messageFlows = ConcurrentHashMap<String, MutableStateFlow<List<MessageEntity>>>()
 
     fun observeConversations(): Flow<List<ConversationEntity>> = conversations
-    fun observeChatLists(): Flow<List<ChatListEntity>> = chatLists
 
     fun observeMessages(conversationId: String): Flow<List<MessageEntity>> =
         messageFlows.getOrPut(conversationId) { MutableStateFlow(loadMessages(conversationId)) }
-
-    /**
-     * Publishes a new outgoing item to an already-open conversation immediately.
-     * SQLite persistence and network routing continue asynchronously afterward.
-     */
-    fun stageOutgoingMessage(message: MessageEntity) {
-        messageFlows[message.conversationId]?.let { flow ->
-            flow.value = (flow.value.filterNot { it.id == message.id } + message).sortedBy { it.sentAt }
-        }
-    }
-
-    suspend fun getConversation(id: String): ConversationEntity? = withContext(Dispatchers.IO) {
-        loadConversation(id)
-    }
 
     suspend fun latestMessageTime(conversationId: String): Long = withContext(Dispatchers.IO) {
         db().rawQuery("SELECT COALESCE(MAX(sentAt), 0) FROM messages WHERE conversationId = ?", arrayOf(conversationId)).use {
@@ -41,14 +24,6 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
     }
 
     suspend fun upsertConversation(conversation: ConversationEntity) = withContext(Dispatchers.IO) {
-        // Network syncs do not know about a user's local hide choice. Preserve it
-        // until revealConversationOnIncoming receives a genuinely new incoming item.
-        val existing = loadConversation(conversation.id)
-        val existingHiddenAt = existing?.hiddenAt ?: 0L
-        val hiddenAt = if (conversation.hiddenAt > 0L) conversation.hiddenAt else existingHiddenAt
-        // The server owns group titles and account names; a direct-contact alias belongs
-        // exclusively to this device and must survive every remote sync.
-        val localTitle = if (conversation.isGroup) null else conversation.localTitle ?: existing?.localTitle
         val values = ContentValues().apply {
             put("id", conversation.id)
             put("title", conversation.title)
@@ -60,10 +35,6 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("lastSeenAt", conversation.lastSeenAt)
             put("members", conversation.members)
             put("unreadCount", conversation.unreadCount)
-            put("blocked", if (conversation.blocked) 1 else 0)
-            put("blockedByMe", if (conversation.blockedByMe) 1 else 0)
-            put("hiddenAt", hiddenAt)
-            put("localTitle", localTitle)
         }
         db().insertWithOnConflict("conversations", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         conversations.value = loadConversations()
@@ -83,11 +54,6 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
             put("attachmentId", message.attachmentId)
             put("attachmentMime", message.attachmentMime)
             put("attachmentName", message.attachmentName)
-            put("editedAt", message.editedAt)
-            put("replyToId", message.replyToId)
-            put("threadRootId", message.threadRootId)
-            put("reactions", message.reactions)
-            put("metadata", message.metadata)
         }
         db().insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         refreshMessages(message.conversationId)
@@ -110,40 +76,6 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         conversations.value.sumOf { it.unreadCount }
     }
 
-    /** Removes only the tile from this phone. Messages are retained locally. */
-    suspend fun hideConversation(conversationId: String) = withContext(Dispatchers.IO) {
-        val values = ContentValues().apply {
-            put("hiddenAt", System.currentTimeMillis())
-            put("unreadCount", 0)
-        }
-        db().update("conversations", values, "id = ?", arrayOf(conversationId))
-        conversations.value = loadConversations()
-    }
-
-    /** Makes a locally hidden tile visible only when a newer message arrives from someone else. */
-    suspend fun revealConversationOnIncoming(conversationId: String, sentAt: Long): Boolean = withContext(Dispatchers.IO) {
-        val hiddenAt = loadConversation(conversationId)?.hiddenAt ?: return@withContext false
-        if (hiddenAt <= 0L || sentAt <= hiddenAt) return@withContext false
-        db().update("conversations", ContentValues().apply { put("hiddenAt", 0) }, "id = ?", arrayOf(conversationId))
-        conversations.value = loadConversations()
-        true
-    }
-
-    /** Used after leaving a group or permanently deleting one. */
-    suspend fun deleteConversation(conversationId: String) = withContext(Dispatchers.IO) {
-        val database = db()
-        database.beginTransaction()
-        try {
-            database.delete("messages", "conversationId = ?", arrayOf(conversationId))
-            database.delete("chat_list_members", "conversationId = ?", arrayOf(conversationId))
-            database.delete("conversations", "id = ?", arrayOf(conversationId))
-            database.setTransactionSuccessful()
-        } finally { database.endTransaction() }
-        messageFlows.remove(conversationId)?.value = emptyList()
-        conversations.value = loadConversations()
-        chatLists.value = loadChatLists()
-    }
-
     suspend fun updateDelivery(id: String, delivery: String, route: String) = withContext(Dispatchers.IO) {
         val database = db()
         val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
@@ -151,33 +83,6 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         }
         val values = ContentValues().apply { put("delivery", delivery); put("route", route) }
         database.update("messages", values, "id = ?", arrayOf(id))
-        conversationId?.let(::refreshMessages)
-    }
-
-    suspend fun updateMessageContent(id: String, body: String, editedAt: Long) = withContext(Dispatchers.IO) {
-        val database = db()
-        val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
-            if (it.moveToFirst()) it.getString(0) else null
-        }
-        database.update("messages", ContentValues().apply { put("body", body); put("editedAt", editedAt) }, "id = ?", arrayOf(id))
-        conversationId?.let(::refreshMessages)
-    }
-
-    suspend fun updateMessageReactions(id: String, reactions: String) = withContext(Dispatchers.IO) {
-        val database = db()
-        val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
-            if (it.moveToFirst()) it.getString(0) else null
-        }
-        database.update("messages", ContentValues().apply { put("reactions", reactions) }, "id = ?", arrayOf(id))
-        conversationId?.let(::refreshMessages)
-    }
-
-    suspend fun updateMessageMetadata(id: String, metadata: String) = withContext(Dispatchers.IO) {
-        val database = db()
-        val conversationId = database.query("messages", arrayOf("conversationId"), "id = ?", arrayOf(id), null, null, null).use {
-            if (it.moveToFirst()) it.getString(0) else null
-        }
-        database.update("messages", ContentValues().apply { put("metadata", metadata) }, "id = ?", arrayOf(id))
         conversationId?.let(::refreshMessages)
     }
 
@@ -216,85 +121,28 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
         }
     }
 
-    suspend fun retainSyncedConversations(ids: Set<String>) = withContext(Dispatchers.IO) {
-        val database = db()
-        if (ids.isEmpty()) {
-            database.delete("conversations", "id != ?", arrayOf("general"))
-        } else {
-            val placeholders = ids.joinToString(",") { "?" }
-            database.delete("conversations", "id != ? AND id NOT IN ($placeholders)", arrayOf("general", *ids.toTypedArray()))
-        }
-        conversations.value = loadConversations()
-    }
-
-    suspend fun createChatList(name: String, conversationIds: Set<String>) = withContext(Dispatchers.IO) {
-        val cleanName = name.trim().take(30)
-        if (cleanName.isBlank() || conversationIds.isEmpty()) return@withContext
-        val database = db()
-        val listId = UUID.randomUUID().toString()
-        database.beginTransaction()
-        try {
-            database.insertOrThrow("chat_lists", null, ContentValues().apply {
-                put("id", listId); put("name", cleanName); put("createdAt", System.currentTimeMillis())
-            })
-            conversationIds.forEach { conversationId ->
-                database.insertWithOnConflict("chat_list_members", null, ContentValues().apply {
-                    put("listId", listId); put("conversationId", conversationId)
-                }, SQLiteDatabase.CONFLICT_IGNORE)
-            }
-            database.setTransactionSuccessful()
-        } finally { database.endTransaction() }
-        chatLists.value = loadChatLists()
-    }
-
-    suspend fun clearAccountData() = withContext(Dispatchers.IO) {
-        val database = db()
-        database.beginTransaction()
-        try {
-            database.delete("messages", null, null)
-            database.delete("conversations", null, null)
-            database.delete("cached_users", null, null)
-            database.delete("chat_list_members", null, null)
-            database.delete("chat_lists", null, null)
-            database.setTransactionSuccessful()
-        } finally { database.endTransaction() }
-        messageFlows.values.forEach { it.value = emptyList() }
-        conversations.value = emptyList()
-        chatLists.value = emptyList()
-    }
-
     private fun refreshMessages(conversationId: String) {
         messageFlows.getOrPut(conversationId) { MutableStateFlow(emptyList()) }.value = loadMessages(conversationId)
     }
 
     private fun loadConversations(): List<ConversationEntity> = db().query(
-        "conversations", null, "hiddenAt = 0", null, null, null, "updatedAt DESC"
+        "conversations", null, null, null, null, null, "updatedAt DESC"
     ).use { cursor ->
         buildList {
-            while (cursor.moveToNext()) add(conversationFromCursor(cursor))
+            while (cursor.moveToNext()) add(ConversationEntity(
+                cursor.getString(cursor.getColumnIndexOrThrow("id")),
+                cursor.getString(cursor.getColumnIndexOrThrow("title")),
+                cursor.getString(cursor.getColumnIndexOrThrow("subtitle")),
+                cursor.getInt(cursor.getColumnIndexOrThrow("isGroup")) == 1,
+                cursor.getLong(cursor.getColumnIndexOrThrow("updatedAt")),
+                cursor.getString(cursor.getColumnIndexOrThrow("username")),
+                cursor.getString(cursor.getColumnIndexOrThrow("avatarUrl")),
+                cursor.getLong(cursor.getColumnIndexOrThrow("lastSeenAt")),
+                cursor.getString(cursor.getColumnIndexOrThrow("members")),
+                cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount"))
+            ))
         }
     }
-
-    private fun loadConversation(id: String): ConversationEntity? = db().query(
-        "conversations", null, "id = ?", arrayOf(id), null, null, null, "1"
-    ).use { cursor -> if (cursor.moveToFirst()) conversationFromCursor(cursor) else null }
-
-    private fun conversationFromCursor(cursor: android.database.Cursor) = ConversationEntity(
-        cursor.getString(cursor.getColumnIndexOrThrow("id")),
-        cursor.getString(cursor.getColumnIndexOrThrow("title")),
-        cursor.getString(cursor.getColumnIndexOrThrow("subtitle")),
-        cursor.getInt(cursor.getColumnIndexOrThrow("isGroup")) == 1,
-        cursor.getLong(cursor.getColumnIndexOrThrow("updatedAt")),
-        cursor.getString(cursor.getColumnIndexOrThrow("username")),
-        cursor.getString(cursor.getColumnIndexOrThrow("avatarUrl")),
-        cursor.getLong(cursor.getColumnIndexOrThrow("lastSeenAt")),
-        cursor.getString(cursor.getColumnIndexOrThrow("members")),
-        cursor.getInt(cursor.getColumnIndexOrThrow("unreadCount")),
-        cursor.getInt(cursor.getColumnIndexOrThrow("blocked")) == 1,
-        cursor.getInt(cursor.getColumnIndexOrThrow("blockedByMe")) == 1,
-        cursor.getLong(cursor.getColumnIndexOrThrow("hiddenAt")),
-        cursor.getString(cursor.getColumnIndexOrThrow("localTitle"))
-    )
 
     private fun loadMessages(conversationId: String): List<MessageEntity> = db().query(
         "messages", null, "conversationId = ?", arrayOf(conversationId), null, null, "sentAt ASC"
@@ -312,29 +160,8 @@ class MowellDao(private val db: () -> SQLiteDatabase) {
                 cursor.getString(cursor.getColumnIndexOrThrow("kind")),
                 cursor.getString(cursor.getColumnIndexOrThrow("attachmentId")),
                 cursor.getString(cursor.getColumnIndexOrThrow("attachmentMime")),
-                cursor.getString(cursor.getColumnIndexOrThrow("attachmentName")),
-                cursor.getLong(cursor.getColumnIndexOrThrow("editedAt")),
-                cursor.getString(cursor.getColumnIndexOrThrow("replyToId")),
-                cursor.getString(cursor.getColumnIndexOrThrow("threadRootId")),
-                cursor.getString(cursor.getColumnIndexOrThrow("reactions")),
-                cursor.getString(cursor.getColumnIndexOrThrow("metadata"))
+                cursor.getString(cursor.getColumnIndexOrThrow("attachmentName"))
             ))
-        }
-    }
-
-    private fun loadChatLists(): List<ChatListEntity> = db().query(
-        "chat_lists", arrayOf("id", "name"), null, null, null, null, "createdAt ASC"
-    ).use { cursor ->
-        buildList {
-            while (cursor.moveToNext()) {
-                val id = cursor.getString(0)
-                val members = db().query(
-                    "chat_list_members", arrayOf("conversationId"), "listId = ?", arrayOf(id), null, null, null
-                ).use { memberCursor ->
-                    buildSet { while (memberCursor.moveToNext()) add(memberCursor.getString(0)) }
-                }
-                add(ChatListEntity(id, cursor.getString(1), members))
-            }
         }
     }
 }

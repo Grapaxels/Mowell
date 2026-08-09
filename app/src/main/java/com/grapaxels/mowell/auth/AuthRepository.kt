@@ -19,41 +19,17 @@ data class UserProfile(
 )
 
 data class AuthSession(val token: String, val user: UserProfile)
-data class ConnectionRequest(val id: String, val direction: String, val user: UserProfile)
-data class GroupInvitation(val id: String, val groupId: String, val groupTitle: String, val inviter: UserProfile)
-data class GroupMember(val user: UserProfile, val isAdmin: Boolean, val isCreator: Boolean)
-data class GroupMemberState(
-    val members: List<GroupMember>,
-    val creatorId: String,
-    val viewerIsAdmin: Boolean,
-    val bannedMembers: List<UserProfile> = emptyList()
-)
-data class LinkedDevice(
-    val id: String,
-    val name: String,
-    val platform: String,
-    val lastSeenAt: Long,
-    val createdAt: Long
-)
 data class AuthResult(val session: AuthSession? = null, val error: String? = null, val verificationEmail: String? = null)
 data class RemoteConversation(
     val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
     val username: String? = null, val avatarUrl: String? = null,
-    val lastSeenAt: Long = 0L, val members: String = "",
-    val blocked: Boolean = false, val blockedByMe: Boolean = false
+    val lastSeenAt: Long = 0L, val members: String = ""
 )
 data class RemoteMessage(
     val id: String, val conversationId: String, val sender: String, val body: String,
     val sentAt: Long, val outgoing: Boolean, val kind: String = "text",
     val attachmentId: String? = null, val attachmentMime: String? = null,
-    val attachmentName: String? = null,
-    val editedAt: Long = 0L,
-    val replyToId: String? = null,
-    val threadRootId: String? = null,
-    val reactions: String = "{}",
-    val metadata: String = "{}",
-    val delivery: String = "sent",
-    val syncAt: Long = sentAt
+    val attachmentName: String? = null
 )
 
 class AuthRepository(context: Context) {
@@ -188,188 +164,6 @@ class AuthRepository(context: Context) {
         }
     }
 
-    suspend fun fetchConnections(): Result<List<UserProfile>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/contacts")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not load connections"))
-            val array = json.optJSONArray("users") ?: return@runCatching emptyList()
-            buildList { for (index in 0 until array.length()) add(parseUser(array.getJSONObject(index))) }
-        }
-    }
-
-    suspend fun fetchConnectionRequests(): Result<List<ConnectionRequest>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/contacts/requests")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not load connection requests"))
-            val array = json.optJSONArray("requests") ?: return@runCatching emptyList()
-            buildList { for (index in 0 until array.length()) {
-                val item = array.getJSONObject(index)
-                add(ConnectionRequest(item.getString("_id"), item.getString("direction"), parseUser(item.getJSONObject("user"))))
-            } }
-        }
-    }
-
-    suspend fun sendConnectionRequest(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val body = JSONObject().put("userId", userId)
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/contacts/requests")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not send connection request"))
-        }
-    }
-
-    suspend fun respondConnectionRequest(requestId: String, accept: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val endpoint = if (accept) "$serverUrl/v1/contacts/requests/$requestId/accept" else "$serverUrl/v1/contacts/requests/$requestId"
-            val builder = Request.Builder().url(endpoint)
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
-            val response = client.newCall(if (accept) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not update connection request"))
-        }
-    }
-
-    suspend fun fetchGroupInvitations(): Result<List<GroupInvitation>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/groups/invitations")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not load group invitations"))
-            val array = json.optJSONArray("invitations") ?: return@runCatching emptyList()
-            buildList { for (index in 0 until array.length()) {
-                val item = array.getJSONObject(index)
-                add(GroupInvitation(item.getString("_id"), item.getString("groupId"), item.getString("groupTitle"), parseUser(item.getJSONObject("inviter"))))
-            } }
-        }
-    }
-
-    suspend fun respondGroupInvitation(invitationId: String, accept: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val builder = Request.Builder().url("$serverUrl/v1/groups/invitations/$invitationId")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
-            val response = client.newCall(if (accept) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not update group invitation"))
-        }
-    }
-
-    suspend fun createGroup(title: String, memberIds: Set<String>, inviteIds: Set<String>, groupType: String = "private", groupPassword: String = ""): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val body = JSONObject().put("title", title.trim()).put("isGroup", true)
-                .put("memberIds", org.json.JSONArray(memberIds.toList())).put("inviteIds", org.json.JSONArray(inviteIds.toList()))
-                .put("groupType", groupType).put("groupPassword", groupPassword)
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not create group"))
-            json.getJSONObject("conversation").getString("_id")
-        }
-    }
-
-    suspend fun addGroupMembers(conversationId: String, memberIds: Set<String>, inviteIds: Set<String>): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val body = JSONObject().put("memberIds", org.json.JSONArray(memberIds.toList())).put("inviteIds", org.json.JSONArray(inviteIds.toList()))
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/members")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not add group members"))
-        }
-    }
-
-    suspend fun updateGroupTitle(conversationId: String, title: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val body = JSONObject().put("title", title.trim())
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").patch(body.toString().toRequestBody(jsonType)).build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not update group name"))
-        }
-    }
-
-    suspend fun updateGroupAvatar(conversationId: String, data: ByteArray, mimeType: String = "image/jpeg"): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            require(data.size <= 1_572_864) { "Group icon must be 1.5 MB or smaller" }
-            val body = JSONObject().put("mimeType", mimeType).put("data", Base64.encodeToString(data, Base64.NO_WRAP))
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/avatar")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not update group icon"))
-            json.optString("avatarUrl")
-        }
-    }
-
-    suspend fun fetchGroupMembers(conversationId: String): Result<GroupMemberState> = withContext(Dispatchers.IO) {
-        runCatching {
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/members")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not load group members"))
-            val array = json.optJSONArray("members")
-            val members = buildList { if (array != null) for (index in 0 until array.length()) {
-                val item = array.getJSONObject(index)
-                add(GroupMember(parseUser(item), item.optBoolean("isAdmin"), item.optBoolean("isCreator")))
-            } }
-            val bannedArray = json.optJSONArray("bannedMembers")
-            val banned = buildList { if (bannedArray != null) for (index in 0 until bannedArray.length()) add(parseUser(bannedArray.getJSONObject(index))) }
-            GroupMemberState(members, json.optString("creatorId"), json.optBoolean("viewerIsAdmin"), banned)
-        }
-    }
-
-    suspend fun setGroupAdmin(conversationId: String, userId: String, admin: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val builder = Request.Builder().url("$serverUrl/v1/conversations/$conversationId/admins/$userId")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
-            val response = client.newCall(if (admin) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not change admin role"))
-        }
-    }
-
-    suspend fun removeGroupMember(conversationId: String, userId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/members/$userId")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").delete().build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not remove group member"))
-        }
-    }
-
-    suspend fun setGroupMemberBanned(conversationId: String, userId: String, banned: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val builder = Request.Builder().url("$serverUrl/v1/conversations/$conversationId/banned/$userId")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
-            val request = if (banned) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()
-            client.newCall(request).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Could not update banned member"))
-            }
-        }
-    }
-
-    suspend fun leaveGroup(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/leave")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}")
-                .post("{}".toRequestBody(jsonType)).build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not exit group"))
-        }
-    }
-
-    suspend fun deleteGroup(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").delete().build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not delete group"))
-        }
-    }
-
     suspend fun createConversation(userId: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val body = JSONObject().put("memberIds", org.json.JSONArray().put(userId))
@@ -380,61 +174,6 @@ class AuthRepository(context: Context) {
             json.getJSONObject("conversation").getString("_id")
         }
     }
-
-    suspend fun ringCall(room: String, conversationId: String, video: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val body = JSONObject().put("conversationId", conversationId).put("video", video)
-            val response = client.newCall(Request.Builder().url("$serverUrl/v1/calls/$room/ring")
-                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
-            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-            if (!response.isSuccessful) error(json.optString("error", "Could not start call"))
-        }
-    }
-
-    suspend fun approveLinkedDevice(payload: String): Result<LinkedDevice> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            val body = JSONObject().put("payload", payload)
-            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices/approve")
-                .header("Authorization", "Bearer ${session.token}")
-                .post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Could not link this browser"))
-                parseLinkedDevice(json.getJSONObject("device"))
-            }
-        }
-    }
-
-    suspend fun fetchLinkedDevices(): Result<List<LinkedDevice>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices")
-                .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Could not load linked devices"))
-                val array = json.optJSONArray("devices") ?: return@use emptyList()
-                buildList { for (index in 0 until array.length()) add(parseLinkedDevice(array.getJSONObject(index))) }
-            }
-        }
-    }
-
-    suspend fun revokeLinkedDevice(deviceId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices/$deviceId")
-                .header("Authorization", "Bearer ${session.token}").delete().build()).execute().use { response ->
-                if (!response.isSuccessful) error("Could not log out this device")
-            }
-        }
-    }
-
-    private fun parseLinkedDevice(json: JSONObject) = LinkedDevice(
-        id = json.optString("id"),
-        name = json.optString("name", "Mowell Web"),
-        platform = json.optString("platform", "Web"),
-        lastSeenAt = parseDate(json.optString("lastSeenAt")),
-        createdAt = parseDate(json.optString("createdAt"))
-    )
 
     suspend fun fetchConversations(): Result<List<RemoteConversation>> = withContext(Dispatchers.IO) {
         runCatching {
@@ -468,8 +207,7 @@ class AuthRepository(context: Context) {
                             }
                         }
                         val title = if (isGroup) item.optString("title").ifBlank { "Mowell group" } else directName
-                        val avatar = if (isGroup) item.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" } else directAvatar
-                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt")), directUsername, avatar, directLastSeen, memberNames.joinToString(", "), item.optBoolean("blocked"), item.optBoolean("blockedByMe")))
+                        add(RemoteConversation(item.getString("_id"), title, isGroup, parseDate(item.optString("lastMessageAt")), directUsername, directAvatar, directLastSeen, memberNames.joinToString(", ")))
                     }
                 }
             }
@@ -490,41 +228,6 @@ class AuthRepository(context: Context) {
                     val item = array.getJSONObject(index)
                     add(parseMessage(item, conversationId, session))
                 }
-            }
-        }
-    }
-
-    /**
-     * Waits briefly for message changes across every conversation. One request
-     * replaces repeatedly downloading the last 100 messages from every chat.
-     */
-    suspend fun fetchMessageChanges(afterMillis: Long): Result<List<RemoteMessage>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            val after = java.net.URLEncoder.encode(isoDate(afterMillis), "UTF-8")
-            client.newCall(Request.Builder().url("$serverUrl/v1/messages/changes?after=$after&waitMs=3500")
-                .header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Message change sync failed"))
-                val array = json.optJSONArray("messages") ?: return@runCatching emptyList()
-                buildList {
-                    for (index in 0 until array.length()) {
-                        val item = array.getJSONObject(index)
-                        val conversationId = item.optString("conversationId")
-                        if (conversationId.isNotBlank()) add(parseMessage(item, conversationId, session))
-                    }
-                }
-            }
-        }
-    }
-
-    suspend fun markConversationRead(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/read")
-                .header("Authorization", "Bearer ${session.token}")
-                .post("{}".toRequestBody(jsonType)).build()).execute().use { response ->
-                if (!response.isSuccessful) error("Could not update read receipt")
             }
         }
     }
@@ -594,85 +297,16 @@ class AuthRepository(context: Context) {
         }
     }
 
-    suspend fun editMessage(conversationId: String, clientId: String, body: String): Result<Long> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            val payload = JSONObject().put("body", body)
-            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/$clientId")
-                .header("Authorization", "Bearer ${session.token}")
-                .patch(payload.toString().toRequestBody(jsonType)).build()).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Message could not be edited"))
-                parseDate(json.optJSONObject("message")?.optString("editedAt").orEmpty()).takeIf { it > 0L } ?: System.currentTimeMillis()
-            }
-        }
-    }
-
-    suspend fun toggleReaction(conversationId: String, clientId: String, emoji: String): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            val payload = JSONObject().put("emoji", emoji)
-            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/$clientId/reactions")
-                .header("Authorization", "Bearer ${session.token}")
-                .post(payload.toString().toRequestBody(jsonType)).build()).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Reaction could not be updated"))
-                (json.optJSONObject("reactions") ?: JSONObject()).toString()
-            }
-        }
-    }
-
-    suspend fun votePoll(conversationId: String, clientId: String, option: Int): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            val payload = JSONObject().put("option", option)
-            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages/$clientId/poll-vote")
-                .header("Authorization", "Bearer ${session.token}")
-                .post(payload.toString().toRequestBody(jsonType)).build()).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Vote could not be saved"))
-                (json.optJSONObject("metadata") ?: JSONObject()).toString()
-            }
-        }
-    }
-
-    suspend fun setBlocked(conversationId: String, blocked: Boolean): Result<Pair<Boolean, Boolean>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val session = savedSession ?: error("Not signed in")
-            val builder = Request.Builder().url("$serverUrl/v1/conversations/$conversationId/block")
-                .header("Authorization", "Bearer ${session.token}")
-            val request = if (blocked) builder.post("{}".toRequestBody(jsonType)).build() else builder.delete().build()
-            client.newCall(request).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
-                if (!response.isSuccessful) error(json.optString("error", "Could not update blocked user"))
-                json.optBoolean("blocked") to json.optBoolean("blockedByMe")
-            }
-        }
-    }
-
     private fun parseMessage(item: JSONObject, conversationId: String, session: AuthSession): RemoteMessage {
         val senderObject = item.optJSONObject("sender")
         val senderId = senderObject?.optString("_id").orEmpty()
         val attachment = item.optJSONObject("attachment")
-        val reactionCounts = JSONObject()
-        val reactionArray = item.optJSONArray("reactions")
-        if (reactionArray != null) for (index in 0 until reactionArray.length()) {
-            val emoji = reactionArray.optJSONObject(index)?.optString("emoji").orEmpty()
-            if (emoji.isNotBlank()) reactionCounts.put(emoji, reactionCounts.optInt(emoji) + 1)
-        }
         return RemoteMessage(
             item.optString("clientId", item.optString("_id")), conversationId,
             senderObject?.let { it.optString("displayName", it.optString("username", "Mowell user")) } ?: "Mowell user",
             item.optString("body"), parseDate(item.optString("sentAt")), senderId == session.user.id,
             item.optString("kind", "text"), attachment?.optString("_id"),
-            attachment?.optString("mimeType"), attachment?.optString("fileName"),
-            parseDate(item.optString("editedAt")),
-            item.optString("replyToClientId").takeIf { it.isNotBlank() && it != "null" },
-            item.optString("threadRootClientId").takeIf { it.isNotBlank() && it != "null" },
-            reactionCounts.toString(),
-            (item.optJSONObject("metadata") ?: JSONObject()).toString(),
-            item.optString("delivery", if (senderId == session.user.id) "sent" else "received"),
-            maxOf(parseDate(item.optString("updatedAt")), parseDate(item.optString("sentAt")))
+            attachment?.optString("mimeType"), attachment?.optString("fileName")
         )
     }
 
@@ -705,7 +339,7 @@ class AuthRepository(context: Context) {
     }
 
     private fun parseUser(json: JSONObject) = UserProfile(
-        json.getString("id"), json.getString("username"), json.optString("email", ""),
+        json.getString("id"), json.getString("username"), json.optString("email"),
         json.optString("displayName", json.getString("username")), json.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" }
     )
 

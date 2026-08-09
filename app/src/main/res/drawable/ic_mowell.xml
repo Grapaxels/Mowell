@@ -1,12 +1,5 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp"
-    android:height="24dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- Android status-bar icons must be a single-color transparent silhouette.
-         This keeps the official Mowell speech-bubble/M mark without a square tile. -->
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M54,8C28.6,8 8,27.5 8,51.6C8,73.7 25.2,91.8 47.8,94.8L73.8,102L70.4,90.4C88,83.8 100,69 100,51.6C100,27.5 79.4,8 54,8ZM27,33L40,33L54,50L68,33L81,33L81,76L68,76L68,54L54,70L40,54L40,76L27,76Z" />
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#0B7A6B" android:pathData="M0,0h108v108h-108z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M19,27h15l20,27 20,-27h15v54h-15v-30l-20,25 -20,-25v30h-15z"/>
 </vector>

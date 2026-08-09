@@ -13,9 +13,6 @@ object NotificationPreferences {
     fun sendSound(context: Context) = prefs(context).getBoolean("send_sound", true)
     fun setSendSound(context: Context, enabled: Boolean) = prefs(context).edit().putBoolean("send_sound", enabled).apply()
 
-    fun enterToSend(context: Context) = prefs(context).getBoolean("enter_to_send", false)
-    fun setEnterToSend(context: Context, enabled: Boolean) = prefs(context).edit().putBoolean("enter_to_send", enabled).apply()
-
     fun messageSound(context: Context, conversationId: String? = null): String {
         val configured = conversationId?.let { prefs(context).getString("conversation_sound:$it", null) }
             ?: prefs(context).getString("message_sound", null)

@@ -12,8 +12,8 @@ android {
         applicationId = "com.grapaxels.mowell"
         minSdk = 24
         targetSdk = 35
-        versionCode = 41
-        versionName = "2.4.1"
+        versionCode = 11
+        versionName = "1.3.1"
         buildConfigField("boolean", "SELF_UPDATE", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -42,8 +42,6 @@ android {
         create("direct") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
-            // GitHub/Vercel builds download the next signed APK and then hand it
-            // to Android's normal, user-confirmed package installer.
             buildConfigField("boolean", "SELF_UPDATE", "true")
         }
     }

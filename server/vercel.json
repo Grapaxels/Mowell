@@ -3,8 +3,7 @@
   "version": 2,
   "functions": {
     "api/index.js": {
-      "maxDuration": 30,
-      "includeFiles": "{assets/Mowell.apk,web/**}"
+      "maxDuration": 30
     }
   },
   "rewrites": [
