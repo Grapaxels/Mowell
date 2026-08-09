@@ -18,7 +18,9 @@ const state = {
 
 const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
-  lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null
+  lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
+  iceServers: [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }],
+  relayAvailable: false, facingMode: 'user'
 };
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({
@@ -544,35 +546,96 @@ async function callSignal(type, payload = {}, target = null) {
   return api(`/v1/calls/${encodeURIComponent(call.room)}/signals`, { method: 'POST', body: JSON.stringify({ type, payload, target }) });
 }
 
+async function loadIceConfiguration() {
+  try {
+    const data = await api('/v1/calls/ice-servers');
+    if (Array.isArray(data.iceServers) && data.iceServers.length) call.iceServers = data.iceServers;
+    call.relayAvailable = Boolean(data.relayAvailable);
+  } catch {
+    call.iceServers = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+    call.relayAvailable = false;
+  }
+}
+
+async function tuneSender(sender, kind) {
+  try {
+    const parameters = sender.getParameters();
+    if (!parameters.encodings?.length) parameters.encodings = [{}];
+    if (kind === 'video') {
+      parameters.degradationPreference = 'maintain-framerate';
+      parameters.encodings[0].maxBitrate = 2500000;
+      parameters.encodings[0].maxFramerate = 30;
+    } else {
+      parameters.encodings[0].maxBitrate = 64000;
+    }
+    await sender.setParameters(parameters);
+  } catch { /* Older browsers retain their adaptive defaults. */ }
+}
+
 async function makePeer(id, name, shouldOffer) {
   if (call.peers.has(id)) return call.peers.get(id);
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }], iceCandidatePoolSize: 4 });
+  const pc = new RTCPeerConnection({
+    iceServers: call.iceServers,
+    iceCandidatePoolSize: 10,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require'
+  });
   const remote = new MediaStream();
-  const entry = { id, name, pc, remote, pending: [] };
+  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null };
   call.peers.set(id, entry);
-  call.stream?.getTracks().forEach((track) => pc.addTrack(track, call.stream));
+  call.stream?.getTracks().forEach((track) => {
+    const sender = pc.addTrack(track, call.stream);
+    tuneSender(sender, track.kind);
+  });
   pc.ontrack = (event) => {
     if (!remote.getTracks().some((track) => track.id === event.track.id)) remote.addTrack(event.track);
-    let video = document.getElementById(`remote-${id}`);
-    if (!video) {
-      video = document.createElement('video'); video.id = `remote-${id}`; video.autoplay = true; video.playsInline = true;
-      $('remote-videos').append(video);
+    let media = document.getElementById(`remote-${id}`);
+    if (!media) {
+      media = document.createElement(call.video ? 'video' : 'audio');
+      media.id = `remote-${id}`; media.dataset.remoteMedia = 'true'; media.autoplay = true; media.playsInline = true;
+      $('remote-videos').append(media);
     }
-    video.srcObject = remote; video.play().catch(() => {});
+    media.srcObject = remote; media.play().catch(() => {});
     $('call-status').textContent = call.video ? 'Video connected' : 'Call connected';
   };
   pc.onicecandidate = (event) => { if (event.candidate) callSignal('ice', event.candidate.toJSON(), id).catch(() => {}); };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') $('call-status').textContent = call.video ? 'Video connected' : 'Call connected';
-    if (['failed', 'disconnected'].includes(pc.connectionState)) $('call-status').textContent = 'Reconnecting…';
+    if (pc.connectionState === 'connected') {
+      clearTimeout(entry.restartTimer);
+      entry.restartAttempts = 0;
+      $('call-status').textContent = call.video ? 'Video connected' : 'Call connected';
+    }
+    if (pc.connectionState === 'disconnected') scheduleIceRecovery(entry, 1400);
+    if (pc.connectionState === 'failed') scheduleIceRecovery(entry, 100);
   };
   if (shouldOffer) await sendOffer(entry);
   return entry;
 }
 
-async function sendOffer(entry) {
+function scheduleIceRecovery(entry, delay) {
+  if (call.closed || entry.restartTimer) return;
+  if (entry.restartAttempts >= 3) {
+    $('call-status').textContent = call.relayAvailable ? 'Unable to restore this call' : 'This network needs a relay route';
+    if (!call.relayAvailable) toast('Direct calling is blocked on this network. Add the free TURN variables to Vercel.');
+    return;
+  }
+  $('call-status').textContent = 'Trying another secure route…';
+  entry.restartTimer = setTimeout(async () => {
+    entry.restartTimer = null;
+    if (call.closed || entry.pc.connectionState === 'connected') return;
+    entry.restartAttempts += 1;
+    // One deterministic offerer prevents both peers restarting simultaneously.
+    if (state.me.id.localeCompare(entry.id) < 0) await sendOffer(entry, true).catch(() => {});
+    entry.restartTimer = setTimeout(() => {
+      entry.restartTimer = null;
+      if (entry.pc.connectionState !== 'connected') scheduleIceRecovery(entry, 100);
+    }, 5000);
+  }, delay);
+}
+
+async function sendOffer(entry, restart = false) {
   if (entry.pc.signalingState !== 'stable') return;
-  await entry.pc.setLocalDescription(await entry.pc.createOffer());
+  await entry.pc.setLocalDescription(await entry.pc.createOffer(restart ? { iceRestart: true } : undefined));
   await callSignal('offer', { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp }, entry.id);
 }
 
@@ -619,7 +682,7 @@ async function pollCall() {
   }
 }
 
-function removePeer(id) { const peer = call.peers.get(id); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); }
+function removePeer(id) { const peer = call.peers.get(id); clearTimeout(peer?.restartTimer); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); }
 function showIncoming(conversation, message, data) {
   state.incoming = { conversation, message, data };
   const title = displayTitle(conversation);
@@ -651,13 +714,15 @@ async function joinCallRoom(room, conversation, video, initiator) {
 }
 
 async function openCall({ room, conversation, video, initiator }) {
-  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.peers.clear();
+  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.peers.clear();
   $('incoming-call').classList.add('hidden'); $('call-screen').classList.remove('hidden');
   const title = displayTitle(conversation);
   $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
   try {
-    call.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false });
-    $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video);
+    const iceConfiguration = loadIceConfiguration();
+    call.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video ? { facingMode: { ideal: call.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false });
+    await iceConfiguration;
+    $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video); $('local-video').classList.remove('rear');
     await joinCallRoom(room, conversation, video, initiator);
     if (initiator) await sendMessage(JSON.stringify({ room, video, group: Boolean(conversation.isGroup) }), 'call');
     call.startedAt = Date.now(); updateCallTimer(); call.timer = setInterval(updateCallTimer, 1000);
@@ -680,8 +745,8 @@ async function endCall(notify = true) {
   call.closed = true; clearInterval(call.timer);
   if (notify) await callSignal('leave', { reason: 'ended' }).catch(() => {});
   call.stream?.getTracks().forEach((track) => track.stop());
-  call.peers.forEach((peer) => peer.pc.close()); call.peers.clear();
-  $('remote-videos').querySelectorAll('video').forEach((video) => video.remove());
+  call.peers.forEach((peer) => { clearTimeout(peer.restartTimer); peer.pc.close(); }); call.peers.clear();
+  $('remote-videos').querySelectorAll('[data-remote-media]').forEach((media) => media.remove());
   $('local-video').srcObject = null; $('call-screen').classList.add('hidden');
   if (state.incoming?.data?.room === room) state.incoming = null;
   if (state.active) loadMessages({ preserve: true }).catch(() => {});
@@ -695,6 +760,24 @@ function toggleCamera() {
   const track = call.stream?.getVideoTracks()[0]; if (!track) return toast('This is a voice call.');
   track.enabled = !track.enabled; $('camera-call').classList.toggle('off', !track.enabled); $('camera-call').querySelector('span').textContent = track.enabled ? 'Camera' : 'Start video';
   callSignal('media', { video: track.enabled }).catch(() => {});
+}
+
+async function flipCamera() {
+  const oldTrack = call.stream?.getVideoTracks()[0];
+  if (!oldTrack) return toast('Start video before flipping the camera.');
+  const nextFacing = call.facingMode === 'user' ? 'environment' : 'user';
+  try {
+    const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: nextFacing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+    const newTrack = camera.getVideoTracks()[0];
+    for (const peer of call.peers.values()) {
+      const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
+      if (sender) { await sender.replaceTrack(newTrack); tuneSender(sender, 'video'); }
+    }
+    call.stream.removeTrack(oldTrack); oldTrack.stop(); call.stream.addTrack(newTrack);
+    call.facingMode = nextFacing;
+    $('local-video').classList.toggle('rear', nextFacing === 'environment');
+    $('local-video').srcObject = call.stream;
+  } catch { toast('Another camera is not available on this device.'); }
 }
 
 function startPolling() {
@@ -748,6 +831,7 @@ $('accept-call').onclick = () => { if (!state.incoming) return; const incoming =
 $('hangup-call').onclick = () => endCall(true);
 $('mute-call').onclick = toggleMute;
 $('camera-call').onclick = toggleCamera;
+$('flip-call').onclick = flipCamera;
 window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
 
 boot();
