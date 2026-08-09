@@ -31,3 +31,8 @@ email/username and password used in the Android app.
 The existing 1.3.2 web layout is retained. A web-only QR action opens a
 scannable code for `https://mowellweb.grapaxels.in`; it does not change the
 Android UI or perform account/device pairing.
+
+The signed 2.4.1 APK is included in Vercel's `server/public` directory and is
+served as a static asset at
+`https://mowell-api.grapaxels.in/Mowell-v2.4.1.apk`, avoiding private GitHub
+raw-download authentication and serverless-function response-size limits.

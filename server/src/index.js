@@ -21,6 +21,7 @@ if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must contain
 if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { autoIndex: true });
 const app = express();
 const webRoot = fileURLToPath(new URL("../web", import.meta.url));
+const publicRoot = fileURLToPath(new URL("../public", import.meta.url));
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -38,11 +39,26 @@ app.use(helmet({
 }));
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 app.use(express.json({ limit: "4mb" }));
+app.use(express.static(publicRoot, {
+  index: false,
+  setHeaders: (res, path) => {
+    if (path.endsWith(".apk")) {
+      res.setHeader("Content-Type", "application/vnd.android.package-archive");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.1.apk");
+      res.setHeader("Cache-Control", "public, max-age=300, immutable");
+    }
+  }
+}));
 app.use(express.static(webRoot, {
   index: "index.html",
   maxAge: "5m",
   setHeaders: (res, path) => {
     if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+    if (path.endsWith(".apk")) {
+      res.setHeader("Content-Type", "application/vnd.android.package-archive");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.1.apk");
+      res.setHeader("Cache-Control", "public, max-age=300, immutable");
+    }
   }
 }));
 
@@ -192,7 +208,7 @@ app.get("/health/email", (_req, res) => {
 app.get("/v1/app/version", (_req, res) => res.json({
   versionCode: 41,
   versionName: "2.4.1",
-  apkUrl: "https://raw.githubusercontent.com/Grapaxels/Mowell/main/Mowell-v2.4.1.apk",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.1.apk",
   sha256: "627E732CD4DC26B0EE39C95501A9A1F6D7244A167F468F17E2DBD2DB88BB3AF7",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
