@@ -11,7 +11,7 @@ import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { fileURLToPath } from "node:url";
-import { CallRoom, CallSignal, Conversation, Media, Message, TypingState, User } from "./models/index.js";
+import { CallRoom, CallSignal, ConnectionRequest, Conversation, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -24,6 +24,7 @@ const webRoot = fileURLToPath(new URL("../web", import.meta.url));
 const webIndex = fileURLToPath(new URL("../web/index.html", import.meta.url));
 const publicRoot = fileURLToPath(new URL("../public", import.meta.url));
 app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
@@ -144,6 +145,23 @@ const sendVerification = async (user, force = false) => {
   });
   await user.save();
 };
+const sendLoginCode = async (user, force = false) => {
+  const now = Date.now();
+  if (!force && user.loginLastSentAt && now - new Date(user.loginLastSentAt).getTime() < 60000) return;
+  const code = String(crypto.randomInt(100000, 1000000));
+  user.loginCodeHash = emailCodeHash(user.email, `login:${code}`);
+  user.loginExpiresAt = new Date(now + 10 * 60 * 1000);
+  user.loginLastSentAt = new Date(now);
+  user.loginAttempts = 0;
+  const smtp = smtpSettings();
+  await mailer().sendMail({
+    from: process.env.SMTP_FROM || `Mowell from Grapaxels <${smtp.user}>`, to: user.email,
+    subject: `${code} is your Mowell login code`,
+    text: `Your Mowell login code is ${code}. It expires in 10 minutes. If you did not try to sign in, change your password.`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h1 style="margin:0">Mowell</h1><p style="color:#6d55e7">from Grapaxels</p><p>Use this code to finish signing in:</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;background:#eeeaff;border-radius:16px;text-align:center">${code}</div><p>This code expires in 10 minutes.</p></div>`
+  });
+  await user.save();
+};
 const sendPasswordReset = async (user) => {
   const code = String(crypto.randomInt(100000, 1000000));
   user.passwordResetCodeHash = emailCodeHash(user.email, `reset:${code}`);
@@ -230,7 +248,7 @@ app.post("/v1/auth/register", async (req, res) => {
 
 app.post("/v1/auth/login", async (req, res) => {
   const identity = String(req.body.identity || "").trim().toLowerCase();
-  const user = await User.findOne({ $or: [{ email: identity }, { username: identity }] }).select("+passwordHash +verificationCodeHash +verificationExpiresAt +verificationLastSentAt +verificationAttempts");
+  const user = await User.findOne({ $or: [{ email: identity }, { username: identity }] }).select("+passwordHash +verificationCodeHash +verificationExpiresAt +verificationLastSentAt +verificationAttempts +loginCodeHash +loginExpiresAt +loginLastSentAt +loginAttempts");
   if (!user?.passwordHash || !(await bcrypt.compare(String(req.body.password || ""), user.passwordHash))) {
     return res.status(401).json({ error: "Incorrect email, username, or password" });
   }
@@ -239,15 +257,28 @@ app.post("/v1/auth/login", async (req, res) => {
     catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
     return res.status(403).json({ error: "Verify your email to continue", verificationRequired: true, email: user.email });
   }
-  user.lastSeenAt = new Date(); await user.save();
-  res.json({ token: issueToken(user), user: publicUser(user) });
+  try { await sendLoginCode(user, true); }
+  catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
+  res.status(202).json({ verificationRequired: true, loginVerificationRequired: true, email: user.email, message: "Login code sent" });
 });
 
 app.post("/v1/auth/verify-email", async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const code = String(req.body.code || "").trim();
-  const user = await User.findOne({ email }).select("+verificationCodeHash +verificationExpiresAt +verificationAttempts");
-  if (!user || user.emailVerified) return res.status(400).json({ error: "Verification request is invalid" });
+  const user = await User.findOne({ email }).select("+verificationCodeHash +verificationExpiresAt +verificationAttempts +loginCodeHash +loginExpiresAt +loginAttempts");
+  if (!user) return res.status(400).json({ error: "Verification request is invalid" });
+  if (user.emailVerified && user.loginCodeHash) {
+    if (!/^\d{6}$/.test(code) || !user.loginExpiresAt || user.loginExpiresAt < new Date()) return res.status(400).json({ error: "Login code is invalid or expired" });
+    user.loginAttempts = (user.loginAttempts || 0) + 1;
+    if (user.loginAttempts > 5) { user.loginCodeHash = undefined; await user.save(); return res.status(429).json({ error: "Too many attempts. Sign in again for a new code" }); }
+    const suppliedLogin = Buffer.from(emailCodeHash(email, `login:${code}`), "hex");
+    const expectedLogin = Buffer.from(user.loginCodeHash, "hex");
+    if (suppliedLogin.length !== expectedLogin.length || !crypto.timingSafeEqual(suppliedLogin, expectedLogin)) { await user.save(); return res.status(400).json({ error: "Incorrect login code" }); }
+    user.loginCodeHash = undefined; user.loginExpiresAt = undefined; user.loginAttempts = 0; user.lastSeenAt = new Date();
+    await user.save();
+    return res.json({ token: issueToken(user), user: publicUser(user) });
+  }
+  if (user.emailVerified) return res.status(400).json({ error: "Verification request is invalid" });
   if (!/^\d{6}$/.test(code) || !user.verificationCodeHash || !user.verificationExpiresAt || user.verificationExpiresAt < new Date()) return res.status(400).json({ error: "Code is invalid or expired" });
   user.verificationAttempts = (user.verificationAttempts || 0) + 1;
   if (user.verificationAttempts > 5) { user.verificationCodeHash = undefined; await user.save(); return res.status(429).json({ error: "Too many attempts. Request a new code" }); }
@@ -261,9 +292,12 @@ app.post("/v1/auth/verify-email", async (req, res) => {
 
 app.post("/v1/auth/resend-verification", async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
-  const user = await User.findOne({ email }).select("+verificationLastSentAt +verificationCodeHash +verificationExpiresAt +verificationAttempts");
+  const user = await User.findOne({ email }).select("+verificationLastSentAt +verificationCodeHash +verificationExpiresAt +verificationAttempts +loginCodeHash +loginExpiresAt +loginLastSentAt +loginAttempts");
   if (user && !user.emailVerified) {
     try { await sendVerification(user); }
+    catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
+  } else if (user?.emailVerified && user.loginCodeHash) {
+    try { await sendLoginCode(user); }
     catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
   }
   res.json({ ok: true, message: "If the account is pending, a verification code has been sent" });
@@ -355,6 +389,7 @@ app.get("/v1/users/:id/avatar", async (req, res) => {
   if (!user?.avatarData) return res.sendStatus(404);
   res.set("Content-Type", user.avatarMime || "image/jpeg");
   res.set("Cache-Control", "public, max-age=300");
+  res.set("Cross-Origin-Resource-Policy", "cross-origin");
   res.send(user.avatarData);
 });
 
@@ -363,6 +398,47 @@ app.get("/v1/users/search", auth, async (req, res) => {
   if (query.length < 2) return res.json({ users: [] });
   const users = await User.find({ _id: { $ne: req.auth.sub }, username: { $regex: `^${escapeRegex(query)}`, $options: "i" } }).limit(20);
   res.json({ users: users.map(publicUser) });
+});
+
+app.get("/v1/connections/requests", auth, async (req, res) => {
+  const requests = await ConnectionRequest.find({ recipient: req.auth.sub, status: "pending" })
+    .populate("requester", "username displayName avatarUrl")
+    .sort({ createdAt: -1 }).limit(50).lean();
+  res.json({ requests: requests.map((item) => ({
+    id: item._id.toString(), createdAt: item.createdAt,
+    user: item.requester ? publicUser(item.requester) : null
+  })).filter((item) => item.user) });
+});
+
+app.post("/v1/connections/requests", auth, async (req, res) => {
+  const recipientId = String(req.body.userId || "");
+  if (!mongoose.isValidObjectId(recipientId) || recipientId === req.auth.sub) return res.status(400).json({ error: "Choose another Mowell user" });
+  const recipient = await User.findById(recipientId);
+  if (!recipient) return res.status(404).json({ error: "User not found" });
+  const members = [req.auth.sub, recipientId];
+  const conversation = await Conversation.findOne({ isGroup: false, members: { $all: members, $size: 2 } });
+  if (conversation) return res.json({ connected: true, conversationId: conversation._id.toString() });
+  const reverse = await ConnectionRequest.findOne({ requester: recipientId, recipient: req.auth.sub, status: "pending" });
+  if (reverse) return res.status(409).json({ error: "This person already requested to connect. Accept the request from Chats." });
+  const request = await ConnectionRequest.findOneAndUpdate(
+    { requester: req.auth.sub, recipient: recipientId },
+    { $set: { status: "pending", respondedAt: null, createdAt: new Date() } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  res.status(202).json({ connected: false, requestId: request._id.toString(), message: "Connection request sent" });
+});
+
+app.post("/v1/connections/requests/:id/respond", auth, async (req, res) => {
+  const action = String(req.body.action || "").toLowerCase();
+  if (!['accept', 'decline'].includes(action)) return res.status(400).json({ error: "Choose accept or decline" });
+  const request = await ConnectionRequest.findOne({ _id: req.params.id, recipient: req.auth.sub, status: "pending" });
+  if (!request) return res.status(404).json({ error: "Connection request is no longer available" });
+  request.status = action === 'accept' ? 'accepted' : 'declined'; request.respondedAt = new Date(); await request.save();
+  if (action === 'decline') return res.json({ ok: true, accepted: false });
+  const members = [request.requester, request.recipient];
+  let conversation = await Conversation.findOne({ isGroup: false, members: { $all: members, $size: 2 } });
+  if (!conversation) conversation = await Conversation.create({ isGroup: false, members, createdBy: request.requester });
+  res.json({ ok: true, accepted: true, conversationId: conversation._id.toString() });
 });
 
 app.get("/v1/conversations", auth, async (req, res) => {
@@ -387,6 +463,14 @@ app.post("/v1/conversations", auth, async (req, res) => {
   if (!isGroup) {
     const existing = await Conversation.findOne({ isGroup: false, members: { $all: memberIds, $size: 2 } });
     if (existing) return res.json({ conversation: existing });
+    const connected = await ConnectionRequest.exists({
+      status: "accepted",
+      $or: [
+        { requester: memberIds[0], recipient: memberIds[1] },
+        { requester: memberIds[1], recipient: memberIds[0] }
+      ]
+    });
+    if (!connected) return res.status(403).json({ error: "Both people must accept the connection before chatting" });
   }
   const conversation = await Conversation.create({ title: req.body.title, isGroup, members: memberIds, createdBy: req.auth.sub });
   res.status(201).json({ conversation });
