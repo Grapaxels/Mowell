@@ -7,10 +7,6 @@ MONGODB_URI=mongodb+srv://DATABASE_USER:ROTATED_PASSWORD@YOUR_CLUSTER.mongodb.ne
 JWT_SECRET=GENERATE_A_RANDOM_SECRET_OF_AT_LEAST_32_CHARACTERS
 GOOGLE_CLIENT_ID=YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com
 ALLOWED_ORIGIN=*
-ANDROID_VERSION_CODE=241
-ANDROID_VERSION_NAME=2.4.1
-ANDROID_APK_URL=https://github.com/Grapaxels/Mowell/releases/latest/download/Mowell.apk
-ANDROID_APK_SHA256=REPLACE_WITH_THE_2_4_1_APK_SHA256
 ANDROID_UPDATE_REQUIRED=false
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
@@ -32,5 +28,5 @@ Generate `JWT_SECRET` locally with PowerShell:
 ```
 
 Never commit the real MongoDB URI, JWT secret, Google credentials or Android signing keys.
-Replace `ANDROID_APK_SHA256` only after building and signing the 2.4.1 APK; do
-not reuse the hash from an older APK.
+The 2.4.1 version, GitHub APK URL, and verified SHA-256 are built into the API,
+so Vercel does not need Android version, URL, or hash variables.

@@ -2,7 +2,7 @@
 
 The responsive web client is served from this same `server` project. Android
 2.4.1 loads the same authenticated WebRTC ICE configuration used by the web
-client (`versionCode` 241).
+client (`versionCode` 41).
 
 ## Vercel
 

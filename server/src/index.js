@@ -190,10 +190,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: Number(process.env.ANDROID_VERSION_CODE || 241),
-  versionName: process.env.ANDROID_VERSION_NAME || "2.4.1",
-  apkUrl: process.env.ANDROID_APK_URL || null,
-  sha256: process.env.ANDROID_APK_SHA256 || null,
+  versionCode: 41,
+  versionName: "2.4.1",
+  apkUrl: "https://raw.githubusercontent.com/Grapaxels/Mowell/main/Mowell-v2.4.1.apk",
+  sha256: "627E732CD4DC26B0EE39C95501A9A1F6D7244A167F468F17E2DBD2DB88BB3AF7",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 
