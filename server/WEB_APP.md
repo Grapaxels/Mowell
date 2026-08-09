@@ -1,8 +1,8 @@
 # Mowell Web deployment
 
-The responsive web client is served from this same `server` project. The Android
-`app` project is not required for the web deployment and remains unchanged from
-Mowell 1.3.1.
+The responsive web client is served from this same `server` project. Android
+1.3.2 loads the same authenticated WebRTC ICE configuration used by the web
+client.
 
 ## Vercel
 
@@ -14,19 +14,19 @@ Mowell 1.3.1.
 4. Keep `ALLOWED_ORIGIN=*`, or set it to `https://mowellweb.grapaxels.in` if the
    web and API domains use separate deployments.
 
-## Direct WebRTC calls
+## WebRTC calls
 
-Mowell uses peer-to-peer WebRTC for audio and video. Public STUN addresses are
-used only for network-address discovery; they never relay or store call media.
-There is no TURN integration, TURN credential endpoint, or TURN environment
-configuration.
+Mowell first attempts peer-to-peer WebRTC and uses the fixed Metered TURN routes
+in `server/src/index.js` when a direct route is unavailable. Authenticated web
+and Android clients obtain the ICE array from `/v1/calls/ice-servers`.
 
-Direct-only calling cannot cross every carrier NAT, symmetric NAT, VPN, office
-firewall, or restrictive Wi-Fi network. On those networks WebRTC will report
-that a direct peer-to-peer connection is unavailable.
+No TURN environment variables are required. Because the fixed credential is
+present in repository source, access to the repository also grants access to
+the Metered allocation. Rotate it in Metered and update `callIceServers` if the
+repository or credential is exposed.
 
 Open `https://mowellweb.grapaxels.in` and sign in with the same verified Mowell
 email/username and password used in the Android app.
 
-QR device linking is deliberately not included: adding a QR scanner and linked
-device approval flow would require changing the Android 1.3.1 application.
+QR device linking is deliberately not included in this call configuration
+update.

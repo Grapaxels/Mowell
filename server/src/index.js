@@ -56,6 +56,15 @@ const issueToken = (user) => jwt.sign({ sub: user._id.toString(), username: user
 const usernamePattern = /^[a-z0-9_]{3,24}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Fixed Metered ICE configuration requested for Mowell. The route exposing it
+// is authenticated so it is not included in the public web bundle.
+const callIceServers = [
+  { urls: "stun:stun.relay.metered.ca:80" },
+  { urls: "turn:global.relay.metered.ca:80", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" },
+  { urls: "turn:global.relay.metered.ca:80?transport=tcp", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" },
+  { urls: "turn:global.relay.metered.ca:443", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" },
+  { urls: "turns:global.relay.metered.ca:443?transport=tcp", username: "9385ce067902b45d0c90d944", credential: "TS2yMQueZBcqV0yg" }
+];
 const disposableDomains = new Set([
   "10minutemail.com", "guerrillamail.com", "guerrillamailblock.com", "mailinator.com", "temp-mail.org",
   "tempmail.com", "throwawaymail.com", "yopmail.com", "sharklasers.com", "getnada.com", "dispostable.com",
@@ -176,6 +185,11 @@ app.get("/v1/app/version", (_req, res) => res.json({
   sha256: process.env.ANDROID_APK_SHA256 || null,
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
+
+app.get("/v1/calls/ice-servers", auth, (_req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json({ iceServers: callIceServers });
+});
 
 app.post("/v1/auth/register", async (req, res) => {
   try {
