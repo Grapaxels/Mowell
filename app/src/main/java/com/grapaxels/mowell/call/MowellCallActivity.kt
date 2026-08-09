@@ -35,6 +35,8 @@ class MowellCallActivity : ComponentActivity() {
     private lateinit var authToken: String
     private var callPageLoaded = false
     private var videoActive = false
+    private var cameraPermissionRequestInFlight = false
+    private var cameraStartDelayMs = 0L
 
     companion object {
         private var current = WeakReference<MowellCallActivity>(null)
@@ -57,6 +59,11 @@ class MowellCallActivity : ComponentActivity() {
             return
         }
         authToken = auth.token
+        val previousCall = current.get()?.takeIf { it !== this && !it.isFinishing }
+        if (previousCall != null) {
+            cameraStartDelayMs = 700L
+            previousCall.runOnUiThread { previousCall.releaseForReplacement() }
+        }
         current = WeakReference(this)
         intent.getIntExtra("notification_id", 0).takeIf { it != 0 }?.let {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(it)
@@ -81,9 +88,20 @@ class MowellCallActivity : ComponentActivity() {
                 override fun onPermissionRequest(request: PermissionRequest) {
                     runOnUiThread {
                         val allowed = request.resources.filter {
-                            it == PermissionRequest.RESOURCE_AUDIO_CAPTURE || it == PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                            when (it) {
+                                PermissionRequest.RESOURCE_AUDIO_CAPTURE -> ActivityCompat.checkSelfPermission(
+                                    this@MowellCallActivity, Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                PermissionRequest.RESOURCE_VIDEO_CAPTURE -> ActivityCompat.checkSelfPermission(
+                                    this@MowellCallActivity, Manifest.permission.CAMERA
+                                ) == PackageManager.PERMISSION_GRANTED
+                                else -> false
+                            }
                         }.toTypedArray()
-                        request.grant(allowed)
+                        if (allowed.isNotEmpty()) request.grant(allowed) else request.deny()
+                        if (request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE) &&
+                            ActivityCompat.checkSelfPermission(this@MowellCallActivity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
+                        ) requestCameraPermissionFromWeb()
                     }
                 }
             }
@@ -116,6 +134,19 @@ class MowellCallActivity : ComponentActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 702) {
+            cameraPermissionRequestInFlight = false
+            val granted = ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            if (::webView.isInitialized) {
+                webView.evaluateJavascript("window.mowellCameraPermissionChanged && window.mowellCameraPermissionChanged($granted)", null)
+            }
+            if (!granted && !isFinishing) {
+                AlertDialog.Builder(this).setTitle("Camera permission required")
+                    .setMessage("Allow camera access in Android Settings, then return to the call and tap the camera button.")
+                    .setPositiveButton("OK", null).show()
+            }
+            return
+        }
         if (requestCode != 701) return
         if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             loadCallPage(authToken, conversationId)
@@ -148,7 +179,26 @@ class MowellCallActivity : ComponentActivity() {
             .put("darkMode", getSharedPreferences("mowell_ui", Context.MODE_PRIVATE).getBoolean("dark_mode", false))
         val html = assets.open("mowell_call.html").bufferedReader().use { it.readText() }
             .replace("__MOWELL_CONFIG__", config.toString().replace("</", "<\\/"))
-        webView.loadDataWithBaseURL("https://mowell-api.grapaxels.in/", html, "text/html", "UTF-8", null)
+        webView.postDelayed({
+            if (!isFinishing && !isDestroyed) {
+                webView.loadDataWithBaseURL("https://mowell-api.grapaxels.in/", html, "text/html", "UTF-8", null)
+            }
+        }, cameraStartDelayMs)
+    }
+
+    private fun requestCameraPermissionFromWeb() {
+        if (cameraPermissionRequestInFlight || isFinishing) return
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            webView.evaluateJavascript("window.mowellCameraPermissionChanged && window.mowellCameraPermissionChanged(true)", null)
+            return
+        }
+        cameraPermissionRequestInFlight = true
+        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 702)
+    }
+
+    private fun releaseForReplacement() {
+        if (::webView.isInitialized) webView.evaluateJavascript("window.mowellClose && window.mowellClose()", null)
+        finish()
     }
 
     /** Keep a live call visible when the user leaves the Mowell activity. */
@@ -194,6 +244,9 @@ class MowellCallActivity : ComponentActivity() {
     private inner class CallBridge(private val audio: AudioManager) {
         @JavascriptInterface fun setVideoActive(enabled: Boolean) = runOnUiThread { videoActive = enabled }
         @JavascriptInterface fun setSpeaker(enabled: Boolean) = runOnUiThread { audio.isSpeakerphoneOn = enabled }
+        @JavascriptInterface fun hasCameraPermission(): Boolean =
+            ActivityCompat.checkSelfPermission(this@MowellCallActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        @JavascriptInterface fun requestCameraPermission() = runOnUiThread { requestCameraPermissionFromWeb() }
         @JavascriptInterface fun finishCall() = runOnUiThread { finish() }
         @JavascriptInterface fun showMessage(message: String) = runOnUiThread {
             if (!isFinishing) AlertDialog.Builder(this@MowellCallActivity).setTitle("Mowell call").setMessage(message).setPositiveButton("OK", null).show()
