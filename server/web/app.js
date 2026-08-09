@@ -20,7 +20,7 @@ const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
   iceServers: [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }],
-  relayAvailable: false, facingMode: 'user'
+  facingMode: 'user'
 };
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({
@@ -546,17 +546,6 @@ async function callSignal(type, payload = {}, target = null) {
   return api(`/v1/calls/${encodeURIComponent(call.room)}/signals`, { method: 'POST', body: JSON.stringify({ type, payload, target }) });
 }
 
-async function loadIceConfiguration() {
-  try {
-    const data = await api('/v1/calls/ice-servers');
-    if (Array.isArray(data.iceServers) && data.iceServers.length) call.iceServers = data.iceServers;
-    call.relayAvailable = Boolean(data.relayAvailable);
-  } catch {
-    call.iceServers = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
-    call.relayAvailable = false;
-  }
-}
-
 async function tuneSender(sender, kind) {
   try {
     const parameters = sender.getParameters();
@@ -615,11 +604,11 @@ async function makePeer(id, name, shouldOffer) {
 function scheduleIceRecovery(entry, delay) {
   if (call.closed || entry.restartTimer) return;
   if (entry.restartAttempts >= 3) {
-    $('call-status').textContent = call.relayAvailable ? 'Unable to restore this call' : 'This network needs a relay route';
-    if (!call.relayAvailable) toast('Direct calling is blocked on this network. Add the free TURN variables to Vercel.');
+    $('call-status').textContent = 'Direct peer-to-peer connection unavailable';
+    toast('The two networks could not establish a direct WebRTC connection.');
     return;
   }
-  $('call-status').textContent = 'Trying another secure route…';
+  $('call-status').textContent = 'Restoring direct connection…';
   entry.restartTimer = setTimeout(async () => {
     entry.restartTimer = null;
     if (call.closed || entry.pc.connectionState === 'connected') return;
@@ -719,9 +708,7 @@ async function openCall({ room, conversation, video, initiator }) {
   const title = displayTitle(conversation);
   $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
   try {
-    const iceConfiguration = loadIceConfiguration();
     call.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video ? { facingMode: { ideal: call.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false });
-    await iceConfiguration;
     $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video); $('local-video').classList.remove('rear');
     await joinCallRoom(room, conversation, video, initiator);
     if (initiator) await sendMessage(JSON.stringify({ room, video, group: Boolean(conversation.isGroup) }), 'call');

@@ -56,37 +56,6 @@ const issueToken = (user) => jwt.sign({ sub: user._id.toString(), username: user
 const usernamePattern = /^[a-z0-9_]{3,24}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const freeStunServers = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
-const turnCredentialCache = new Map();
-const configuredTurnServer = () => {
-  const urls = String(process.env.TURN_URLS || "").split(",").map((item) => item.trim()).filter(Boolean);
-  const username = String(process.env.TURN_USERNAME || "").trim();
-  const credential = String(process.env.TURN_CREDENTIAL || "").trim();
-  return urls.length && username && credential ? { urls, username, credential } : null;
-};
-const cloudflareTurnServers = async (userId) => {
-  const keyId = String(process.env.CLOUDFLARE_TURN_KEY_ID || "").trim();
-  const apiToken = String(process.env.CLOUDFLARE_TURN_API_TOKEN || "").trim();
-  if (!keyId || !apiToken) return null;
-  const cached = turnCredentialCache.get(userId);
-  if (cached?.expiresAt > Date.now()) return cached.iceServers;
-  const response = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(keyId)}/credentials/generate-ice-servers`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ ttl: 3600 })
-  });
-  if (!response.ok) throw new Error(`Cloudflare TURN returned ${response.status}`);
-  const payload = await response.json();
-  const iceServers = (payload.iceServers || []).map((server) => ({
-    ...server,
-    // Browsers commonly block alternate port 53. Keeping the standard UDP,
-    // TCP, TLS and TCP/443 routes avoids waiting on candidates that cannot work.
-    urls: (Array.isArray(server.urls) ? server.urls : [server.urls]).filter((url) => !String(url).includes(":53"))
-  })).filter((server) => server.urls.length);
-  if (!iceServers.some((server) => server.urls.some((url) => String(url).startsWith("turn")))) throw new Error("Cloudflare did not return a TURN relay");
-  turnCredentialCache.set(userId, { iceServers, expiresAt: Date.now() + 50 * 60 * 1000 });
-  return iceServers;
-};
 const disposableDomains = new Set([
   "10minutemail.com", "guerrillamail.com", "guerrillamailblock.com", "mailinator.com", "temp-mail.org",
   "tempmail.com", "throwawaymail.com", "yopmail.com", "sharklasers.com", "getnada.com", "dispostable.com",
@@ -207,22 +176,6 @@ app.get("/v1/app/version", (_req, res) => res.json({
   sha256: process.env.ANDROID_APK_SHA256 || null,
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
-
-// WebRTC first attempts a direct connection through free STUN. When the
-// network blocks peer-to-peer traffic, a configured TURN relay supplies the
-// same fallback used by production calling applications. TURN secrets stay on
-// the server; clients receive short-lived credentials only.
-app.get("/v1/calls/ice-servers", auth, async (req, res) => {
-  const staticTurn = configuredTurnServer();
-  if (staticTurn) return res.json({ iceServers: [...freeStunServers, staticTurn], relayAvailable: true, source: "configured" });
-  try {
-    const cloudflare = await cloudflareTurnServers(req.auth.sub);
-    if (cloudflare) return res.json({ iceServers: [...freeStunServers, ...cloudflare], relayAvailable: true, source: "cloudflare" });
-  } catch (error) {
-    console.error("Mowell TURN credentials failed", { message: error?.message || "Unknown TURN error" });
-  }
-  res.json({ iceServers: freeStunServers, relayAvailable: false, source: "stun-only" });
-});
 
 app.post("/v1/auth/register", async (req, res) => {
   try {
