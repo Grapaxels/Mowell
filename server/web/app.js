@@ -113,6 +113,12 @@ function clearSession() {
   $('account-dialog').close();
 }
 
+function openWebQr() {
+  const image = $('web-qr-image');
+  if (!image.src) image.src = `${API}/v1/web/qr?v=241`;
+  $('web-qr-dialog').showModal();
+}
+
 function maskEmail(email) {
   const [name = '', domain = ''] = String(email).split('@');
   const visibleName = name.slice(0, 2);
@@ -806,6 +812,8 @@ document.querySelectorAll('[data-close]').forEach((button) => button.onclick = (
 document.querySelectorAll('.nav-button[data-view]').forEach((button) => button.onclick = () => setView(button.dataset.view));
 $('theme-toggle').onclick = () => { document.body.classList.toggle('dark'); localStorage.setItem('mowell_web_theme', document.body.classList.contains('dark') ? 'dark' : 'light'); };
 $('account-button').onclick = () => $('account-dialog').showModal();
+$('show-web-qr-login').onclick = openWebQr;
+$('show-web-qr-account').onclick = () => { $('account-dialog').close(); openWebQr(); };
 $('logout-button').onclick = () => clearSession();
 $('new-button').onclick = () => state.view === 'groups' ? openGroupDialog() : openNewDialog();
 $('empty-new').onclick = openNewDialog;

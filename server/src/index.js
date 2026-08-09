@@ -7,6 +7,7 @@ import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
+import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { fileURLToPath } from "node:url";
@@ -26,7 +27,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       styleSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "blob:"],
+      imgSrc: ["'self'", "data:", "blob:", "https://mowell-api.grapaxels.in"],
       mediaSrc: ["'self'", "blob:"],
       connectSrc: ["'self'", "https://mowell-api.grapaxels.in", "https://mowellweb.grapaxels.in"],
       workerSrc: ["'self'", "blob:"],
@@ -167,6 +168,16 @@ const auth = async (req, res, next) => {
 };
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "mowell-api" }));
+app.get("/v1/web/qr", async (_req, res, next) => {
+  try {
+    const svg = await QRCode.toString("https://mowellweb.grapaxels.in", {
+      type: "svg", errorCorrectionLevel: "M", margin: 2,
+      color: { dark: "#17131f", light: "#ffffff" }, width: 320
+    });
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.type("image/svg+xml").send(svg);
+  } catch (error) { next(error); }
+});
 app.get("/health/email", (_req, res) => {
   const smtp = smtpSettings();
   res.json({
@@ -179,8 +190,8 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: Number(process.env.ANDROID_VERSION_CODE || 1),
-  versionName: process.env.ANDROID_VERSION_NAME || "0.1.0",
+  versionCode: Number(process.env.ANDROID_VERSION_CODE || 241),
+  versionName: process.env.ANDROID_VERSION_NAME || "2.4.1",
   apkUrl: process.env.ANDROID_APK_URL || null,
   sha256: process.env.ANDROID_APK_SHA256 || null,
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"

@@ -8,8 +8,8 @@
   <title>Mowell Web</title>
   <link rel="icon" href="/mowell_logo.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/styles.css?v=131-web-2">
-  <script defer src="/app.js?v=131-web-2"></script>
+  <link rel="stylesheet" href="/styles.css?v=241-web-1">
+  <script defer src="/app.js?v=241-web-1"></script>
 </head>
 <body>
   <svg class="svg-sprite" aria-hidden="true">
@@ -53,6 +53,7 @@
         <button id="login-button" class="primary wide" type="submit"><span>Sign in</span><span class="button-spinner"></span></button>
         <p id="auth-error" class="form-error" role="alert"></p>
         <p class="auth-switch">New to Mowell? <button id="show-register" type="button" class="link">Create an account</button></p>
+        <button id="show-web-qr-login" class="secondary wide web-qr-trigger" type="button">Show Mowell Web QR</button>
       </form>
 
       <form id="register-form" class="auth-card hidden">
@@ -122,7 +123,9 @@
 
   <dialog id="group-dialog" class="modal"><form id="group-form" method="dialog"><button class="dialog-close icon-button" type="button" data-close="group-dialog"><svg><use href="#i-close"/></svg></button><span class="eyebrow">NEW GROUP</span><h2>Create a group</h2><label class="field"><span>Group name</span><input id="group-name" maxlength="80" required></label><p class="field-caption">Select people already visible in your conversations.</p><div id="group-members" class="member-list"></div><button id="create-group" class="primary wide" value="default"><span>Create group</span><span class="button-spinner"></span></button><p id="group-error" class="form-error"></p></form></dialog>
 
-  <dialog id="account-dialog" class="modal account-modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="account-dialog"><svg><use href="#i-close"/></svg></button><div id="profile-avatar" class="profile-avatar">M</div><h2 id="profile-name">Mowell user</h2><p id="profile-username" class="muted">@username</p><button id="logout-button" type="button" class="danger wide"><svg><use href="#i-logout"/></svg>Sign out of Mowell Web</button></form></dialog>
+  <dialog id="account-dialog" class="modal account-modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="account-dialog"><svg><use href="#i-close"/></svg></button><div id="profile-avatar" class="profile-avatar">M</div><h2 id="profile-name">Mowell user</h2><p id="profile-username" class="muted">@username</p><button id="show-web-qr-account" type="button" class="secondary wide">Show Mowell Web QR</button><button id="logout-button" type="button" class="danger wide"><svg><use href="#i-logout"/></svg>Sign out of Mowell Web</button></form></dialog>
+
+  <dialog id="web-qr-dialog" class="modal qr-modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="web-qr-dialog"><svg><use href="#i-close"/></svg></button><span class="eyebrow">MOWELL WEB</span><h2>Open Mowell Web</h2><p class="muted">Scan this code with any camera to open the official Mowell web app.</p><div class="web-qr-frame"><img id="web-qr-image" alt="QR code for Mowell Web"></div><p class="qr-address">mowellweb.grapaxels.in</p></form></dialog>
 
   <section id="incoming-call" class="incoming-call hidden">
     <div class="incoming-card"><div id="incoming-avatar" class="call-avatar">M</div><span id="incoming-kind" class="eyebrow">INCOMING VIDEO CALL</span><h2 id="incoming-name">Mowell user</h2><p>is calling you on Mowell</p><div class="incoming-actions"><button id="decline-call" class="call-action decline"><svg><use href="#i-call"/></svg><span>Decline</span></button><button id="accept-call" class="call-action accept"><svg><use href="#i-video"/></svg><span>Accept</span></button></div></div>

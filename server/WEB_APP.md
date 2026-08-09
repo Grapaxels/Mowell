@@ -1,8 +1,8 @@
 # Mowell Web deployment
 
 The responsive web client is served from this same `server` project. Android
-1.3.2 loads the same authenticated WebRTC ICE configuration used by the web
-client.
+2.4.1 loads the same authenticated WebRTC ICE configuration used by the web
+client (`versionCode` 241).
 
 ## Vercel
 
@@ -28,5 +28,6 @@ repository or credential is exposed.
 Open `https://mowellweb.grapaxels.in` and sign in with the same verified Mowell
 email/username and password used in the Android app.
 
-QR device linking is deliberately not included in this call configuration
-update.
+The existing 1.3.2 web layout is retained. A web-only QR action opens a
+scannable code for `https://mowellweb.grapaxels.in`; it does not change the
+Android UI or perform account/device pairing.
