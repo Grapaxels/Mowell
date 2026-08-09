@@ -1,8 +1,8 @@
 # Mowell Web deployment
 
 The responsive web client is served from this same `server` project. Android
-2.4.1 loads the same authenticated WebRTC ICE configuration used by the web
-client (`versionCode` 41).
+2.4.2 loads the same authenticated WebRTC ICE configuration used by the web
+client (`versionCode` 42) and keeps API responses separate from the web SPA.
 
 ## Vercel
 
@@ -32,7 +32,7 @@ The existing 1.3.2 web layout is retained. A web-only QR action opens a
 scannable code for `https://mowellweb.grapaxels.in`; it does not change the
 Android UI or perform account/device pairing.
 
-The signed 2.4.1 APK is included in Vercel's `server/public` directory and is
+The signed 2.4.2 APK is included in Vercel's `server/public` directory and is
 served as a static asset at
-`https://mowell-api.grapaxels.in/Mowell-v2.4.1.apk`, avoiding private GitHub
+`https://mowell-api.grapaxels.in/Mowell-v2.4.2.apk`, avoiding private GitHub
 raw-download authentication and serverless-function response-size limits.

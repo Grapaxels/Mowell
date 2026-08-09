@@ -21,6 +21,7 @@ if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must contain
 if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { autoIndex: true });
 const app = express();
 const webRoot = fileURLToPath(new URL("../web", import.meta.url));
+const webIndex = fileURLToPath(new URL("../web/index.html", import.meta.url));
 const publicRoot = fileURLToPath(new URL("../public", import.meta.url));
 app.use(helmet({
   contentSecurityPolicy: {
@@ -44,24 +45,11 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.1.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.2.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
 }));
-app.use(express.static(webRoot, {
-  index: "index.html",
-  maxAge: "5m",
-  setHeaders: (res, path) => {
-    if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
-    if (path.endsWith(".apk")) {
-      res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.1.apk");
-      res.setHeader("Cache-Control", "public, max-age=300, immutable");
-    }
-  }
-}));
-
 const publicUser = (user) => ({
   id: user._id.toString(), username: user.username, email: user.email,
   displayName: user.displayName, avatarUrl: user.avatarUrl || null, lastSeenAt: user.lastSeenAt,
@@ -206,10 +194,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 41,
-  versionName: "2.4.1",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.1.apk",
-  sha256: "627E732CD4DC26B0EE39C95501A9A1F6D7244A167F468F17E2DBD2DB88BB3AF7",
+  versionCode: 42,
+  versionName: "2.4.2",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.2.apk",
+  sha256: "991FF88DC805A1C6C1079F6EBD192B1237A1F121C0EDC9458D94364F85DC3193",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 
@@ -622,6 +610,23 @@ app.get("/v1/calls/:room/signals", auth, async (req, res) => {
     const signals = await CallSignal.find(filter).sort({ _id: 1 }).limit(100).populate("sender", "displayName username avatarUrl").lean();
     res.json({ signals: signals.map((s) => ({ id: s._id.toString(), senderId: s.sender._id.toString(), senderName: s.sender.displayName || s.sender.username, senderAvatar: s.sender.avatarUrl || null, type: s.type, payload: s.payload })) });
   } catch { res.status(400).json({ error: "Could not receive call signals" }); }
+});
+
+// API routes must always return API responses. Keeping the SPA after every
+// /v1 route prevents Android's WebRTC client from receiving index.html when a
+// request is missing or mistyped.
+app.use("/v1", (_req, res) => res.status(404).json({ error: "Mowell API endpoint not found", code: "API_NOT_FOUND" }));
+app.use(express.static(webRoot, {
+  index: "index.html",
+  maxAge: "5m",
+  setHeaders: (res, path) => {
+    if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+  }
+}));
+app.use((req, res) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return res.status(404).json({ error: "Route not found" });
+  res.setHeader("Cache-Control", "no-store");
+  return res.sendFile(webIndex);
 });
 
 export default app;
