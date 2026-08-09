@@ -115,7 +115,7 @@ function clearSession() {
 
 function openWebQr() {
   const image = $('web-qr-image');
-  if (!image.src) image.src = `${API}/v1/web/qr?v=241`;
+  if (!image.src) image.src = '/v1/web/qr?v=241-2';
   $('web-qr-dialog').showModal();
 }
 
@@ -561,16 +561,36 @@ async function loadIceConfiguration() {
   }
 }
 
+function hdVideoConstraints(facingMode, exact = false) {
+  return {
+    facingMode: exact ? { exact: facingMode } : { ideal: facingMode },
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+    aspectRatio: { ideal: 16 / 9 },
+    frameRate: { ideal: 30, max: 30 }
+  };
+}
+
+function updateRemoteVideoLayout() {
+  const container = $('remote-videos');
+  const videos = [...container.querySelectorAll('video[data-remote-media]')]
+    .filter((video) => video.videoWidth > 0 && video.videoHeight > 0);
+  container.classList.toggle('has-remote-video', videos.length > 0);
+  container.classList.toggle('single-remote-video', videos.length === 1);
+  if (videos.length) $('call-status').textContent = 'Video connected';
+}
+
 async function tuneSender(sender, kind) {
   try {
     const parameters = sender.getParameters();
     if (!parameters.encodings?.length) parameters.encodings = [{}];
     if (kind === 'video') {
       parameters.degradationPreference = 'maintain-framerate';
-      parameters.encodings[0].maxBitrate = 2500000;
+      parameters.encodings[0].maxBitrate = 5000000;
       parameters.encodings[0].maxFramerate = 30;
+      parameters.encodings[0].scaleResolutionDownBy = 1;
     } else {
-      parameters.encodings[0].maxBitrate = 64000;
+      parameters.encodings[0].maxBitrate = 96000;
     }
     await sender.setParameters(parameters);
   } catch { /* Older browsers retain their adaptive defaults. */ }
@@ -597,17 +617,26 @@ async function makePeer(id, name, shouldOffer) {
     if (!media) {
       media = document.createElement(call.video ? 'video' : 'audio');
       media.id = `remote-${id}`; media.dataset.remoteMedia = 'true'; media.autoplay = true; media.playsInline = true;
+      if (media instanceof HTMLVideoElement) {
+        media.addEventListener('loadeddata', updateRemoteVideoLayout);
+        media.addEventListener('playing', updateRemoteVideoLayout);
+        media.addEventListener('resize', updateRemoteVideoLayout);
+      }
       $('remote-videos').append(media);
     }
     media.srcObject = remote; media.play().catch(() => {});
-    $('call-status').textContent = call.video ? 'Video connected' : 'Call connected';
+    event.track.addEventListener('unmute', updateRemoteVideoLayout);
+    event.track.addEventListener('ended', updateRemoteVideoLayout);
+    $('call-status').textContent = call.video ? 'Call connected — receiving video' : 'Call connected';
   };
   pc.onicecandidate = (event) => { if (event.candidate) callSignal('ice', event.candidate.toJSON(), id).catch(() => {}); };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') {
       clearTimeout(entry.restartTimer);
       entry.restartAttempts = 0;
-      $('call-status').textContent = call.video ? 'Video connected' : 'Call connected';
+      $('call-status').textContent = call.video
+        ? ($('remote-videos').classList.contains('has-remote-video') ? 'Video connected' : 'Call connected — receiving video')
+        : 'Call connected';
     }
     if (pc.connectionState === 'disconnected') scheduleIceRecovery(entry, 1400);
     if (pc.connectionState === 'failed') scheduleIceRecovery(entry, 100);
@@ -686,7 +715,7 @@ async function pollCall() {
   }
 }
 
-function removePeer(id) { const peer = call.peers.get(id); clearTimeout(peer?.restartTimer); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); }
+function removePeer(id) { const peer = call.peers.get(id); clearTimeout(peer?.restartTimer); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); updateRemoteVideoLayout(); }
 function showIncoming(conversation, message, data) {
   state.incoming = { conversation, message, data };
   const title = displayTitle(conversation);
@@ -719,12 +748,15 @@ async function joinCallRoom(room, conversation, video, initiator) {
 
 async function openCall({ room, conversation, video, initiator }) {
   call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.peers.clear();
+  $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('incoming-call').classList.add('hidden'); $('call-screen').classList.remove('hidden');
   const title = displayTitle(conversation);
   $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
   try {
     const iceConfiguration = loadIceConfiguration();
-    call.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video ? { facingMode: { ideal: call.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false });
+    call.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video ? hdVideoConstraints(call.facingMode) : false });
+    const localVideoTrack = call.stream.getVideoTracks()[0];
+    if (localVideoTrack) localVideoTrack.contentHint = 'motion';
     await iceConfiguration;
     $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video); $('local-video').classList.remove('rear');
     await joinCallRoom(room, conversation, video, initiator);
@@ -751,6 +783,7 @@ async function endCall(notify = true) {
   call.stream?.getTracks().forEach((track) => track.stop());
   call.peers.forEach((peer) => { clearTimeout(peer.restartTimer); peer.pc.close(); }); call.peers.clear();
   $('remote-videos').querySelectorAll('[data-remote-media]').forEach((media) => media.remove());
+  $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('local-video').srcObject = null; $('call-screen').classList.add('hidden');
   if (state.incoming?.data?.room === room) state.incoming = null;
   if (state.active) loadMessages({ preserve: true }).catch(() => {});
@@ -771,8 +804,9 @@ async function flipCamera() {
   if (!oldTrack) return toast('Start video before flipping the camera.');
   const nextFacing = call.facingMode === 'user' ? 'environment' : 'user';
   try {
-    const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: nextFacing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+    const camera = await navigator.mediaDevices.getUserMedia({ video: hdVideoConstraints(nextFacing, true), audio: false });
     const newTrack = camera.getVideoTracks()[0];
+    newTrack.contentHint = 'motion';
     for (const peer of call.peers.values()) {
       const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
       if (sender) { await sender.replaceTrack(newTrack); tuneSender(sender, 'video'); }
