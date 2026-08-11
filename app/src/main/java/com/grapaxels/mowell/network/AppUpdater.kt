@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.grapaxels.mowell.auth.AuthRepository
 import com.grapaxels.mowell.BuildConfig
@@ -63,11 +64,13 @@ class AppUpdater(private val context: Context, private val auth: AuthRepository)
             override fun onReceive(receiverContext: Context, intent: Intent) {
                 if (intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) != id) return
                 runCatching { activity.unregisterReceiver(this) }
+                val successful = manager.query(DownloadManager.Query().setFilterById(id)).use { cursor -> cursor.moveToFirst() && cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) == DownloadManager.STATUS_SUCCESSFUL }
+                if (!successful) { Toast.makeText(activity, "Update download failed. Check internet and try again.", Toast.LENGTH_LONG).show(); return }
                 val file = File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Mowell-update.apk")
-                if (!file.exists()) return
+                if (!file.exists()) { Toast.makeText(activity, "Downloaded update file was not found.", Toast.LENGTH_LONG).show(); return }
                 if (update.sha256 != null) {
                     val actual = java.security.MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
-                    if (!actual.equals(update.sha256, ignoreCase = true)) { file.delete(); return }
+                    if (!actual.equals(update.sha256, ignoreCase = true)) { file.delete(); Toast.makeText(activity, "Update verification failed. Please download again.", Toast.LENGTH_LONG).show(); return }
                 }
                 val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.files", file)
                 activity.startActivity(Intent(Intent.ACTION_VIEW).apply {

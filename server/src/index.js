@@ -18,7 +18,12 @@ if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
 if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET is required");
 if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must contain at least 32 characters");
 
-if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { autoIndex: true });
+let mongoPromise = null;
+const ensureMongo = () => {
+  if (mongoose.connection.readyState === 1) return Promise.resolve();
+  if (!mongoPromise) mongoPromise = mongoose.connect(mongoUri, { autoIndex: true, serverSelectionTimeoutMS: 10_000 }).catch((error) => { mongoPromise = null; throw error; });
+  return mongoPromise;
+};
 const app = express();
 app.use((_req, res, next) => { res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), geolocation=(self)"); next(); });
 const webRoot = fileURLToPath(new URL("../web", import.meta.url));
@@ -47,11 +52,18 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.0.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.1.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
 }));
+// Keep health checks and signed APK/update metadata available during a
+// temporary MongoDB cold-start failure. All data routes connect lazily.
+app.use(async (req, res, next) => {
+  if (req.path === "/health" || req.path === "/v1/app/version") return next();
+  try { await ensureMongo(); next(); }
+  catch { res.status(503).json({ error: "Mowell data service is temporarily reconnecting. Please retry." }); }
+});
 const publicUser = (user) => ({
   id: user._id.toString(), username: user.username, email: user.email,
   displayName: user.displayName, avatarUrl: user.avatarUrl || null, lastSeenAt: user.lastSeenAt,
@@ -269,13 +281,13 @@ app.get("/health/email", (_req, res) => {
     fromConfigured: Boolean(process.env.SMTP_FROM)
   });
 });
-app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 50,
-  versionName: "2.5.0",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.0.apk",
-    sha256: "488AC768FD6557330F189CB59B677F2E31C837BEE382D05E94A2BE16A64553BF",
+app.get("/v1/app/version", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.json({
+  versionCode: 51,
+  versionName: "2.5.1",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.1.apk",
+    sha256: "7102916FD62215EB6177C24A0ED1F19A53C98FDB81BAF1020AA769B0698D5F1F",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
-}));
+}); });
 
 app.get("/v1/calls/ice-servers", auth, (_req, res) => {
   res.setHeader("Cache-Control", "private, no-store");
