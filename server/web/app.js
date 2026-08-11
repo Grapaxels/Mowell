@@ -16,7 +16,8 @@ const state = {
   knownUpdates: new Map(),
   initialized: false,
   polling: false,
-  mediaUrls: new Set()
+  mediaUrls: new Set(),
+  lastListHtml: ''
 };
 
 const call = {
@@ -123,7 +124,7 @@ async function openWebQr() {
   $('web-qr-status').textContent = 'Creating a secure one-time code…';
   $('web-qr-dialog').showModal();
   try {
-    const link = await api('/v1/web-link/session', { method: 'POST' });
+    const link = await api('/v1/web-link/session', { method: 'POST', body: JSON.stringify({ deviceId: DEVICE_ID, deviceName: navigator.userAgent }) });
     $('web-qr-image').src = absolute(link.qrUrl);
     $('web-qr-status').textContent = 'Open Linked devices in Mowell on your phone and scan this code.';
     const poll = async () => {
@@ -293,6 +294,7 @@ async function inspectLatest(conversation) {
 
 function setView(view) {
   state.view = view;
+  state.lastListHtml = '';
   document.querySelectorAll('.nav-button[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
   const titles = { chats: ['Chats', 'Search conversations'], calls: ['Calls', 'Search call history'], people: ['People', 'Search username'], groups: ['Groups', 'Search groups'] };
   $('view-title').textContent = titles[view][0];
@@ -324,7 +326,10 @@ async function renderList() {
   if (query) list = list.filter((item) => displayTitle(item).toLowerCase().includes(query));
   const requests = state.view === 'chats' && !query ? state.connectionRequests.map(connectionRequestMarkup).join('') : '';
   const conversations = list.length ? list.map(conversationRow).join('') : `<div class="list-empty"><div><svg><use href="#i-${state.view === 'groups' ? 'group' : state.view === 'calls' ? 'call' : 'chat'}"/></svg><p>No ${escapeHtml(state.view)} found.</p></div></div>`;
-  $('list').innerHTML = requests + conversations;
+  const nextHtml = requests + conversations;
+  if (state.lastListHtml === nextHtml) return;
+  state.lastListHtml = nextHtml;
+  $('list').innerHTML = nextHtml;
   document.querySelectorAll('[data-conversation]').forEach((button) => button.onclick = () => openConversation(state.conversations.find((item) => conversationId(item) === button.dataset.conversation)));
   document.querySelectorAll('[data-request-action]').forEach((button) => button.onclick = () => respondConnectionRequest(button.dataset.requestId, button.dataset.requestAction));
 }
@@ -999,6 +1004,16 @@ document.querySelectorAll('[data-close]').forEach((button) => button.onclick = (
 document.querySelectorAll('.nav-button[data-view]').forEach((button) => button.onclick = () => setView(button.dataset.view));
 $('theme-toggle').onclick = () => { document.body.classList.toggle('dark'); localStorage.setItem('mowell_web_theme', document.body.classList.contains('dark') ? 'dark' : 'light'); };
 $('account-button').onclick = () => $('account-dialog').showModal();
+$('chat-more').onclick = () => {
+  if (!state.active) return;
+  const title = displayTitle(state.active);
+  $('conversation-profile-avatar').innerHTML = avatarMarkup(title, avatarUrl(state.active));
+  $('conversation-profile-name').textContent = title;
+  $('conversation-profile-kind').textContent = state.active.isGroup ? 'Mowell group conversation' : 'Mowell contact';
+  $('conversation-dialog').showModal();
+};
+$('conversation-voice-call').onclick = () => { $('conversation-dialog').close(); startCall(false); };
+$('conversation-video-call').onclick = () => { $('conversation-dialog').close(); startCall(true); };
 $('show-web-qr-login').onclick = openWebQr;
 $('show-web-qr-account').onclick = () => { $('account-dialog').close(); openWebQr(); };
 $('logout-button').onclick = () => clearSession();

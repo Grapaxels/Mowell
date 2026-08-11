@@ -11,7 +11,7 @@ import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { fileURLToPath } from "node:url";
-import { CallRoom, CallSignal, ConnectionRequest, Conversation, DeviceLink, Media, Message, TypingState, User } from "./models/index.js";
+import { CallRoom, CallSignal, ConnectionRequest, Conversation, DeviceLink, LinkedDevice, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -47,7 +47,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.7.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.8.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -59,7 +59,7 @@ const publicUser = (user) => ({
 });
 // Mobile sessions intentionally persist until the user chooses Log out.
 // Rotate JWT_SECRET to revoke all sessions after a security incident.
-const issueToken = (user) => jwt.sign({ sub: user._id.toString(), username: user.username }, process.env.JWT_SECRET, { issuer: "mowell-api" });
+const issueToken = (user, extra = {}) => jwt.sign({ sub: user._id.toString(), username: user.username, ...extra }, process.env.JWT_SECRET, { issuer: "mowell-api" });
 const usernamePattern = /^[a-z0-9_]{3,24}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -192,6 +192,10 @@ const auth = async (req, res, next) => {
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
     if (!token) return res.status(401).json({ error: "Authentication required" });
     req.auth = jwt.verify(token, process.env.JWT_SECRET, { issuer: "mowell-api" });
+    if (req.auth.sid) {
+      const linked = await LinkedDevice.exists({ sessionId: req.auth.sid, user: req.auth.sub, revokedAt: null });
+      if (!linked) return res.status(401).json({ error: "This linked device was logged out" });
+    }
     const user = await User.findById(req.auth.sub).select("email emailVerified");
     if (!user) return res.status(401).json({ error: "Account not found" });
     if (!user.emailVerified) return res.status(403).json({ error: "Verify your email to continue", verificationRequired: true, email: user.email });
@@ -212,9 +216,10 @@ app.get("/v1/web/qr", async (_req, res, next) => {
 });
 
 const linkTokenHash = (token) => crypto.createHash("sha256").update(String(token || "")).digest("hex");
-app.post("/v1/web-link/session", async (_req, res) => {
+app.post("/v1/web-link/session", async (req, res) => {
   const token = crypto.randomBytes(32).toString("base64url");
-  await DeviceLink.create({ tokenHash: linkTokenHash(token), expiresAt: new Date(Date.now() + 2 * 60 * 1000) });
+  const deviceName = String(req.body?.deviceName || req.headers["user-agent"] || "Mowell Web").slice(0, 120);
+  await DeviceLink.create({ tokenHash: linkTokenHash(token), deviceId: String(req.body?.deviceId || "").slice(0, 100), deviceName, expiresAt: new Date(Date.now() + 2 * 60 * 1000) });
   res.status(201).json({ token, qrUrl: `/v1/web-link/qr?token=${encodeURIComponent(token)}`, expiresIn: 120 });
 });
 app.get("/v1/web-link/qr", async (req, res, next) => {
@@ -232,8 +237,10 @@ app.get("/v1/web-link/session/:token", async (req, res) => {
   if (!link) return res.status(410).json({ error: "This linking code expired" });
   if (link.status !== "approved" || !link.user) return res.json({ status: "pending" });
   const user = link.user;
+  const sessionId = crypto.randomUUID();
+  await LinkedDevice.create({ user: user._id, sessionId, deviceId: link.deviceId, deviceName: link.deviceName, lastSeenAt: new Date() });
   await DeviceLink.deleteOne({ _id: link._id });
-  res.json({ status: "approved", token: issueToken(user), user: publicUser(user) });
+  res.json({ status: "approved", token: issueToken(user, { sid: sessionId, kind: "web" }), user: publicUser(user) });
 });
 app.post("/v1/web-link/approve", auth, async (req, res) => {
   const token = String(req.body.token || "");
@@ -241,6 +248,15 @@ app.post("/v1/web-link/approve", auth, async (req, res) => {
   if (!link) return res.status(410).json({ error: "This linking code is invalid or expired" });
   link.user = req.auth.sub; link.status = "approved"; link.approvedAt = new Date(); await link.save();
   res.json({ ok: true, message: "Mowell Web linked" });
+});
+app.get("/v1/linked-devices", auth, async (req, res) => {
+  const devices = await LinkedDevice.find({ user: req.auth.sub, revokedAt: null }).sort({ createdAt: -1 }).lean();
+  res.json({ devices: devices.map((device) => ({ id: device._id.toString(), name: device.deviceName, linkedAt: device.createdAt, lastSeenAt: device.lastSeenAt })) });
+});
+app.delete("/v1/linked-devices/:id", auth, async (req, res) => {
+  const device = await LinkedDevice.findOneAndUpdate({ _id: req.params.id, user: req.auth.sub, revokedAt: null }, { revokedAt: new Date() });
+  if (!device) return res.sendStatus(404);
+  res.json({ ok: true });
 });
 app.get("/health/email", (_req, res) => {
   const smtp = smtpSettings();
@@ -254,10 +270,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 46,
-  versionName: "2.4.7",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.7.apk",
-    sha256: "37A2AFE0F7A66919DACC09B1C50F97C9EE8CDAD1FBC737EB21D51F02D15FCD28",
+  versionCode: 48,
+  versionName: "2.4.8",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.8.apk",
+    sha256: "FA7AF14DEE218A2EB0D80E668C88D46730FBCE94A691314E6D9F5560255D8C5A",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 

@@ -62,6 +62,7 @@ import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.ContactPhone
+import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -384,6 +385,10 @@ private fun LinkedDevicesScreen(vm: MowellViewModel, back: () -> Unit) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Scan the QR displayed on the Mowell Web login page.") }
     var busy by remember { mutableStateOf(false) }
+    var devices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var loadingDevices by remember { mutableStateOf(true) }
+    fun refreshDevices() { loadingDevices = true; vm.loadLinkedDevices { devices = it; loadingDevices = false } }
+    LaunchedEffect(Unit) { refreshDevices() }
     val scanner = remember(context) {
         val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
         GmsBarcodeScanning.getClient(context, options)
@@ -403,10 +408,20 @@ private fun LinkedDevicesScreen(vm: MowellViewModel, back: () -> Unit) {
         Unit
     }
     Scaffold(containerColor = Canvas, topBar = { Row(Modifier.fillMaxWidth().background(ClayWhite).padding(horizontal = 6.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }; Text("Linked devices", fontSize = 20.sp, fontWeight = FontWeight.Black) } }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Column(Modifier.padding(padding).fillMaxSize().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
             OrbLogo(88.dp); Spacer(Modifier.height(22.dp)); Text("Link Mowell Web", fontSize = 27.sp, fontWeight = FontWeight.Black); Spacer(Modifier.height(9.dp)); Text(status, color = Muted, textAlign = androidx.compose.ui.text.style.TextAlign.Center); Spacer(Modifier.height(24.dp))
             Button(onClick = scan, enabled = !busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(18.dp)) { if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp) else { Icon(Icons.Rounded.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("Scan QR code") } }
             Spacer(Modifier.height(14.dp)); Text("Codes expire after two minutes and can only be used once.", color = Muted, fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.height(28.dp)); Text("Logged-in devices", modifier = Modifier.fillMaxWidth(), fontSize = 19.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(10.dp))
+            if (loadingDevices) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            else if (devices.isEmpty()) Text("No web devices are currently linked.", modifier = Modifier.fillMaxWidth(), color = Muted)
+            else devices.forEach { device ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(RoundedCornerShape(16.dp)).background(SoftSurface).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Computer, null, tint = Violet); Spacer(Modifier.width(10.dp)); Text(device.second, Modifier.weight(1f), maxLines = 2)
+                    IconButton(onClick = { vm.unlinkDevice(device.first) { refreshDevices() } }) { Icon(Icons.Rounded.Logout, "Log out device", tint = Color(0xFFD63C4B)) }
+                }
+            }
         }
     }
 }

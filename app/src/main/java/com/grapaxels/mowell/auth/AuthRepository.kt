@@ -192,6 +192,27 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun linkedDevices(): Result<List<Pair<String, String>>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Sign in to manage linked devices")
+            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices").header("Authorization", "Bearer ${session.token}").build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not load linked devices"))
+                val devices = json.optJSONArray("devices") ?: return@runCatching emptyList()
+                buildList { for (index in 0 until devices.length()) { val device = devices.getJSONObject(index); add(device.getString("id") to device.optString("name", "Mowell Web")) } }
+            }
+        }
+    }
+
+    suspend fun unlinkDevice(id: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Sign in to manage linked devices")
+            client.newCall(Request.Builder().url("$serverUrl/v1/linked-devices/$id").header("Authorization", "Bearer ${session.token}").delete().build()).execute().use { response ->
+                if (!response.isSuccessful) error("Could not log out this device")
+            }
+        }
+    }
+
     suspend fun requestConnection(userId: String): Result<ConnectionStartResult> = withContext(Dispatchers.IO) {
         runCatching {
             val body = JSONObject().put("userId", userId)

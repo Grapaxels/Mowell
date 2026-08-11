@@ -166,7 +166,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
                     validation.verificationEmail != null -> { _session.value = null; _verificationEmail.value = validation.verificationEmail; _authError.value = validation.error }
                     else -> refreshUpdate(showPopup = true)
                 }
-            }
+            } else refreshUpdate(showPopup = true)
         }
         viewModelScope.launch {
             while (isActive) {
@@ -402,6 +402,14 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { auth.approveWebLink(token).fold(onSuccess = done, onFailure = { done(it.message ?: "Could not link Mowell Web") }) }
     }
 
+    fun loadLinkedDevices(done: (List<Pair<String, String>>) -> Unit) {
+        viewModelScope.launch { auth.linkedDevices().fold(onSuccess = done, onFailure = { _authError.value = it.message ?: "Could not load linked devices"; done(emptyList()) }) }
+    }
+
+    fun unlinkDevice(id: String, done: () -> Unit) {
+        viewModelScope.launch { auth.unlinkDevice(id).onFailure { _authError.value = it.message ?: "Could not log out device" }; done() }
+    }
+
     fun playVoiceInline(context: Context, message: MessageEntity) {
         val id = message.attachmentId ?: return
         viewModelScope.launch {
@@ -578,7 +586,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private fun passcodeHash(conversationId: String, passcode: String, salt: String) =
         MessageDigest.getInstance("SHA-256").digest("$conversationId:$salt:$passcode".toByteArray()).joinToString("") { "%02x".format(it) }
     fun dismissUpdate() { _showUpdatePopup.value = false }
-    fun checkForUpdates() { viewModelScope.launch { refreshUpdate(showPopup = false) } }
+    fun checkForUpdates() { viewModelScope.launch { refreshUpdate(showPopup = true) } }
     fun installUpdate(activity: Activity) { _update.value?.let { updater.downloadAndInstall(activity, it) } }
 
     private suspend fun refreshUpdate(showPopup: Boolean) {

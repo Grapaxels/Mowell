@@ -112,7 +112,20 @@ const deviceLinkSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   status: { type: String, enum: ["pending", "approved"], default: "pending", index: true },
   approvedAt: Date,
+  deviceId: String,
+  deviceName: String,
   expiresAt: { type: Date, required: true, expires: 0 }
 }, { timestamps: true });
 
 export const DeviceLink = mongoose.model("DeviceLink", deviceLinkSchema);
+
+const linkedDeviceSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  sessionId: { type: String, required: true, unique: true, index: true },
+  deviceId: String,
+  deviceName: { type: String, default: "Mowell Web" },
+  revokedAt: Date,
+  lastSeenAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+export const LinkedDevice = mongoose.model("LinkedDevice", linkedDeviceSchema);
