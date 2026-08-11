@@ -277,7 +277,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private suspend fun syncConversationInternal(conversationId: String, title: String, notify: Boolean, markRead: Boolean) {
-        val after = if (markRead) 0L else maxOf(syncCursors[conversationId] ?: 0L, clearedConversations.getLong(conversationId, 0L))
+        val after = maxOf(if (markRead) 0L else (syncCursors[conversationId] ?: 0L), clearedConversations.getLong(conversationId, 0L))
         auth.fetchMessages(conversationId, after, markRead).onSuccess { remote ->
             remote.forEach { item ->
                 if (hiddenMessages.getStringSet(item.conversationId, emptySet()).orEmpty().contains(item.id)) return@forEach
@@ -407,7 +407,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { auth.approveWebLink(token).fold(onSuccess = done, onFailure = { done(it.message ?: "Could not link Mowell Web") }) }
     }
 
-    fun clearChat(conversationId: String) { val now = System.currentTimeMillis(); clearedConversations.edit().putLong(conversationId, now).apply(); CallCoordinator.hangupConversation(conversationId); viewModelScope.launch { val ids = dao.clearConversation(conversationId); val viewer = File(getApplication<Application>().cacheDir, "mowell_viewer"); ids.forEach { id -> viewer.listFiles()?.filter { it.name.startsWith("${id}_") }?.forEach { it.delete() }; File(getApplication<Application>().cacheDir, "mowell_voice_$id.m4a").delete() }; syncCursors[conversationId] = now } }
+    fun clearChat(conversationId: String) { val now = System.currentTimeMillis(); clearedConversations.edit().putLong(conversationId, now).apply(); CallCoordinator.hangupConversation(conversationId); notifier.clearConversation(conversationId); viewModelScope.launch { val ids = dao.clearConversation(conversationId); val cache = getApplication<Application>().cacheDir; val viewer = File(cache, "mowell_viewer"); ids.forEach { id -> viewer.listFiles()?.filter { it.name.startsWith("${id}_") }?.forEach { it.delete() }; cache.listFiles()?.filter { it.name.startsWith("mowell_voice_$id.") }?.forEach { it.delete() } }; syncCursors[conversationId] = now } }
 
     fun deleteChat(conversation: ConversationEntity) {
         hiddenConversations.edit().putLong(conversation.id, conversation.updatedAt.coerceAtLeast(System.currentTimeMillis())).apply()
@@ -430,9 +430,12 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         val id = message.attachmentId ?: return
         viewModelScope.launch {
             auth.downloadAttachment(id).onSuccess { (_, bytes) ->
-                val file = File(context.cacheDir, "mowell_voice_$id.m4a")
+                val extension = message.attachmentName?.substringAfterLast('.', "m4a")?.take(8)?.replace(Regex("[^A-Za-z0-9]"), "")?.ifBlank { "m4a" } ?: "m4a"
+                val file = File(context.cacheDir, "mowell_voice_$id.$extension")
                 file.writeBytes(bytes)
-                MediaPlayer.create(context, Uri.fromFile(file))?.apply {
+                MediaPlayer().apply {
+                    setDataSource(file.absolutePath)
+                    prepare()
                     setOnCompletionListener { player -> player.release() }
                     start()
                 }

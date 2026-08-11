@@ -47,7 +47,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.9.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.0.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -270,10 +270,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 49,
-  versionName: "2.4.9",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.9.apk",
-    sha256: "87FBB808A341C95F213D268204C3306E6EBFB9FB633AB761ED4A4F84DD53E4FB",
+  versionCode: 50,
+  versionName: "2.5.0",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.0.apk",
+    sha256: "488AC768FD6557330F189CB59B677F2E31C837BEE382D05E94A2BE16A64553BF",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 

@@ -82,7 +82,7 @@ class MessageNotifier(private val context: Context) {
                     putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION, notificationId)
                 }
                 val declinePending = PendingIntent.getBroadcast(context, notificationId + 1, decline, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                builder.addAction(0, "Decline", declinePending).addAction(0, "Accept", acceptPending).setOngoing(true).setTimeoutAfter(45_000)
+                builder.addAction(0, "Decline", declinePending).addAction(0, "Accept", acceptPending).setOngoing(true).setTimeoutAfter(30_000)
             }
         } else if (message.kind != "call_end") {
             val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {

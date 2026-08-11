@@ -102,7 +102,7 @@ const callRoomSchema = new mongoose.Schema({
   status: { type: String, enum: ["ringing", "active", "ended"], default: "ringing", index: true },
   answeredAt: Date,
   endedAt: Date,
-  unansweredExpiresAt: { type: Date, default: () => new Date(Date.now() + 45 * 1000) },
+  unansweredExpiresAt: { type: Date, default: () => new Date(Date.now() + 30 * 1000) },
   expiresAt: { type: Date, default: () => new Date(Date.now() + 6 * 60 * 60 * 1000), expires: 0 }
 }, { timestamps: true });
 

@@ -17,6 +17,7 @@ const state = {
   initialized: false,
   polling: false,
   mediaUrls: new Set(),
+  lastMessagesSignature: '',
   lastListHtml: ''
 };
 
@@ -386,6 +387,7 @@ async function createDirect(user) {
 async function openConversation(conversation) {
   if (!conversation) return;
   state.active = conversation;
+  state.lastMessagesSignature = '';
   const title = displayTitle(conversation);
   $('chat-title').textContent = title;
   $('chat-status').textContent = conversation.isGroup ? `${conversation.members?.length || 0} members` : 'Mowell conversation';
@@ -404,9 +406,14 @@ async function loadMessages({ preserve = false } = {}) {
     const data = await api(`/v1/conversations/${conversationId(state.active)}/messages?markRead=true`);
     const before = state.messages.at(-1)?._id;
     const clearedAt = Number(localStorage.getItem(`mowell_clear_${conversationId(state.active)}`) || 0);
-    state.messages = (data.messages || []).filter((message) => new Date(message.sentAt || message.createdAt || 0).getTime() > clearedAt);
+    const nextMessages = (data.messages || []).filter((message) => new Date(message.sentAt || message.createdAt || 0).getTime() > clearedAt);
+    const signature = nextMessages.map((message) => `${message._id || message.id}:${message.body}:${message.kind}:${message.readBy?.length || 0}`).join('|');
+    state.messages = nextMessages;
     state.active._lastMessage = state.messages.at(-1);
-    renderMessages(preserve && before === state.messages.at(-1)?._id);
+    if (signature !== state.lastMessagesSignature) {
+      state.lastMessagesSignature = signature;
+      renderMessages(preserve && before === state.messages.at(-1)?._id);
+    }
     renderList();
   } catch (error) { toast(error.message); }
 }
@@ -867,11 +874,11 @@ function startConnectedTimer() {
   call.timer = setInterval(updateCallTimer, 1000);
 }
 
-async function endCall(notify = true) {
+async function endCall(notify = true, reason = 'ended') {
   if (call.closed) return;
   const room = call.room;
   call.closed = true; clearInterval(call.timer);
-  if (notify) await callSignal('leave', { reason: 'ended' }).catch(() => {});
+  if (notify) await callSignal('leave', { reason }).catch(() => {});
   call.screenStream?.getTracks().forEach((track) => { track.onended = null; track.stop(); }); call.screenStream = null;
   call.stream?.getTracks().forEach((track) => track.stop());
   call.peers.forEach((peer) => { clearTimeout(peer.restartTimer); peer.pc.close(); }); call.peers.clear();
@@ -1066,7 +1073,7 @@ $('audio-call').onclick = () => startCall(false);
 $('video-call').onclick = () => startCall(true);
 $('decline-call').onclick = async () => { if (state.incoming) { call.room = state.incoming.data.room; call.closed = false; await callSignal('leave', { reason: 'declined' }).catch(() => {}); call.closed = true; } $('incoming-call').classList.add('hidden'); state.incoming = null; };
 $('accept-call').onclick = () => { if (!state.incoming) return; const incoming = state.incoming; openCall({ room: incoming.data.room, conversation: incoming.conversation, video: Boolean(incoming.data.video), initiator: false }); };
-$('hangup-call').onclick = () => endCall(true);
+$('hangup-call').onclick = () => endCall(true, 'cancelled');
 $('mute-call').onclick = toggleMute;
 $('camera-call').onclick = toggleCamera;
 $('flip-call').onclick = flipCamera;
