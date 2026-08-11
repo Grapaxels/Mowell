@@ -32,6 +32,9 @@ class MowellCallActivity : ComponentActivity() {
     private lateinit var room: String
     private lateinit var conversationId: String
     private var videoCall = false
+    private var pendingToken = ""
+    private var pendingConversation = ""
+    private var pageLoaded = false
 
     companion object {
         private var current = WeakReference<MowellCallActivity>(null)
@@ -106,14 +109,38 @@ class MowellCallActivity : ComponentActivity() {
                 webView.postDelayed({ finish() }, 250)
             }
         })
-        val permissions = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        pendingToken = auth.token
+        pendingConversation = conversation
+        val permissions = if (videoCall) {
+            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        } else {
+            arrayOf(Manifest.permission.RECORD_AUDIO)
+        }
         if (permissions.any { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
             ActivityCompat.requestPermissions(this, permissions, 701)
+        } else {
+            loadCallPage(pendingToken, pendingConversation)
         }
-        loadCallPage(auth.token, conversation)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 701) return
+        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+            loadCallPage(pendingToken, pendingConversation)
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Camera and microphone required")
+                .setMessage("Allow the requested permission in Android settings to use Mowell calls.")
+                .setPositiveButton("Close") { _, _ -> finish() }
+                .setCancelable(false)
+                .show()
+        }
     }
 
     private fun loadCallPage(token: String, conversation: String) {
+        if (pageLoaded || token.isBlank() || conversation.isBlank()) return
+        pageLoaded = true
         val config = JSONObject()
             .put("api", AuthRepository(this).serverUrl)
             .put("token", token)
