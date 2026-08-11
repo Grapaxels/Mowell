@@ -3,12 +3,16 @@ package com.grapaxels.mowell.call
 import android.Manifest
 import android.app.NotificationManager
 import android.app.AlertDialog
+import android.app.PictureInPictureParams
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.Build
+import android.util.Rational
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
@@ -27,6 +31,7 @@ class MowellCallActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var room: String
     private lateinit var conversationId: String
+    private var videoCall = false
 
     companion object {
         private var current = WeakReference<MowellCallActivity>(null)
@@ -48,6 +53,7 @@ class MowellCallActivity : ComponentActivity() {
         room = intent.getStringExtra("room").orEmpty()
         val conversation = intent.getStringExtra("conversation").orEmpty()
         conversationId = conversation
+        videoCall = intent.getBooleanExtra("video", false)
         val auth = AuthRepository(this).savedSession
         if (room.isBlank() || conversation.isBlank() || auth == null) {
             finish()
@@ -85,6 +91,15 @@ class MowellCallActivity : ComponentActivity() {
             addJavascriptInterface(CallBridge(audio), "MowellNative")
         }
         setContentView(webView)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && videoCall) {
+            setPictureInPictureParams(
+                PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(9, 16))
+                    .setAutoEnterEnabled(true)
+                    .setSeamlessResizeEnabled(true)
+                    .build()
+            )
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 webView.evaluateJavascript("window.mowellHangup && window.mowellHangup()", null)
@@ -118,6 +133,22 @@ class MowellCallActivity : ComponentActivity() {
     private fun remoteEnded() {
         if (::webView.isInitialized) webView.evaluateJavascript("window.mowellRemoteEnded && window.mowellRemoteEnded()", null)
         webView.postDelayed({ finish() }, 500)
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (videoCall && Build.VERSION.SDK_INT in Build.VERSION_CODES.O until Build.VERSION_CODES.S && !isFinishing) {
+            enterPictureInPictureMode(
+                PictureInPictureParams.Builder().setAspectRatio(Rational(9, 16)).build()
+            )
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (::webView.isInitialized) {
+            webView.evaluateJavascript("window.mowellSetPip && window.mowellSetPip(${isInPictureInPictureMode})", null)
+        }
     }
 
     override fun onDestroy() {

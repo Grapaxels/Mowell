@@ -52,7 +52,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.3.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.4.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -282,10 +282,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.json({
-  versionCode: 53,
-  versionName: "2.5.3",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.3.apk",
-    sha256: "1FA77A2D89D3F214F4FC6377B5895BA8167FBC09E1E7113A2EDF25867652DC64",
+  versionCode: 54,
+  versionName: "2.5.4",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.4.apk",
+    sha256: "9DE677CBFAB99D82F6A4C0070E59A184205BB30D35D54B957C34B58DDCE9B825",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }); });
 
@@ -716,7 +716,21 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
     call.participantHeartbeats = { ...(call.participantHeartbeats || {}), [req.auth.sub]: Date.now() };
     call.markModified("participantHeartbeats");
     await call.save();
-    res.json({ ok: true, video: call.video, group: Boolean(call.group || call.participants.length > 2), status: call.status });
+    const activeSince = Date.now() - 30000;
+    const heartbeats = call.participantHeartbeats || {};
+    const activeIds = call.participants
+      .map((id) => id.toString())
+      .filter((id) => id !== req.auth.sub && Number(heartbeats[id] || 0) >= activeSince);
+    const activeUsers = activeIds.length
+      ? await User.find({ _id: { $in: activeIds } }).select("displayName username avatarUrl").lean()
+      : [];
+    res.json({
+      ok: true,
+      video: call.video,
+      group: Boolean(call.group || call.participants.length > 2),
+      status: call.status,
+      peers: activeUsers.map((user) => ({ id: user._id.toString(), name: user.displayName || user.username, avatar: user.avatarUrl || null }))
+    });
   } catch { res.status(400).json({ error: "Could not join call" }); }
 });
 

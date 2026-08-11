@@ -42,6 +42,8 @@
             android:name=".call.MowellCallActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="false"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:screenOrientation="fullSensor" />
         <receiver android:name=".network.NotificationActionReceiver" android:exported="false" />
         <provider
