@@ -109,6 +109,8 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private val router = TransportRouter(application, bluetooth)
     private val chatLocks = application.getSharedPreferences("mowell_chat_locks", Context.MODE_PRIVATE)
     private val hiddenMessages = application.getSharedPreferences("mowell_hidden_messages", Context.MODE_PRIVATE)
+    private val hiddenConversations = application.getSharedPreferences("mowell_hidden_conversations", Context.MODE_PRIVATE)
+    private val clearedConversations = application.getSharedPreferences("mowell_cleared_conversations", Context.MODE_PRIVATE)
     val conversations = dao.observeConversations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var selectedPeer: String? = null
 
@@ -263,6 +265,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             val remoteConversations = auth.fetchConversations().getOrNull() ?: return
             val notify = initialSyncComplete
             remoteConversations.forEach { remote ->
+                val hiddenAt = hiddenConversations.getLong(remote.id, 0L)
+                if (hiddenAt > 0L && remote.updatedAt <= hiddenAt) return@forEach
+                if (hiddenAt > 0L) hiddenConversations.edit().remove(remote.id).apply()
                 val existing = conversations.value.find { it.id == remote.id }
                 dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members, existing?.unreadCount ?: 0))
                 syncConversationInternal(remote.id, remote.title, notify, false)
@@ -272,7 +277,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private suspend fun syncConversationInternal(conversationId: String, title: String, notify: Boolean, markRead: Boolean) {
-        val after = if (markRead) 0L else (syncCursors[conversationId] ?: 0L)
+        val after = if (markRead) 0L else maxOf(syncCursors[conversationId] ?: 0L, clearedConversations.getLong(conversationId, 0L))
         auth.fetchMessages(conversationId, after, markRead).onSuccess { remote ->
             remote.forEach { item ->
                 if (hiddenMessages.getStringSet(item.conversationId, emptySet()).orEmpty().contains(item.id)) return@forEach
@@ -400,6 +405,17 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
 
     fun approveWebLink(token: String, done: (String) -> Unit) {
         viewModelScope.launch { auth.approveWebLink(token).fold(onSuccess = done, onFailure = { done(it.message ?: "Could not link Mowell Web") }) }
+    }
+
+    fun clearChat(conversationId: String) { val now = System.currentTimeMillis(); clearedConversations.edit().putLong(conversationId, now).apply(); CallCoordinator.hangupConversation(conversationId); viewModelScope.launch { val ids = dao.clearConversation(conversationId); val viewer = File(getApplication<Application>().cacheDir, "mowell_viewer"); ids.forEach { id -> viewer.listFiles()?.filter { it.name.startsWith("${id}_") }?.forEach { it.delete() }; File(getApplication<Application>().cacheDir, "mowell_voice_$id.m4a").delete() }; syncCursors[conversationId] = now } }
+
+    fun deleteChat(conversation: ConversationEntity) {
+        hiddenConversations.edit().putLong(conversation.id, conversation.updatedAt.coerceAtLeast(System.currentTimeMillis())).apply()
+        viewModelScope.launch { dao.deleteConversation(conversation.id) }
+    }
+
+    fun blockUser(conversationId: String) {
+        viewModelScope.launch { auth.blockConversation(conversationId).onFailure { _authError.value = it.message ?: "Could not block user" } }
     }
 
     fun loadLinkedDevices(done: (List<Pair<String, String>>) -> Unit) {

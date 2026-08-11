@@ -47,7 +47,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.8.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.9.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -270,10 +270,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 48,
-  versionName: "2.4.8",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.8.apk",
-    sha256: "FA7AF14DEE218A2EB0D80E668C88D46730FBCE94A691314E6D9F5560255D8C5A",
+  versionCode: 49,
+  versionName: "2.4.9",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.9.apk",
+    sha256: "87FBB808A341C95F213D268204C3306E6EBFB9FB633AB761ED4A4F84DD53E4FB",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 
@@ -557,6 +557,14 @@ app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
 app.post("/v1/conversations/:id/messages", auth, async (req, res) => {
   const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
   if (!conversation) return res.sendStatus(404);
+  if (!conversation.isGroup) {
+    const otherId = conversation.members.find((id) => id.toString() !== req.auth.sub);
+    const blocked = await User.exists({ $or: [
+      { _id: req.auth.sub, blockedUsers: otherId },
+      { _id: otherId, blockedUsers: req.auth.sub }
+    ] });
+    if (blocked) return res.status(403).json({ error: "Messages are unavailable because this user is blocked" });
+  }
   const body = String(req.body.body || "").trim();
   const clientId = String(req.body.clientId || "").trim();
   if (!body || !clientId) return res.status(400).json({ error: "clientId and body are required" });
@@ -768,6 +776,16 @@ app.get("/v1/calls/:room/signals", auth, async (req, res) => {
     const signals = await CallSignal.find(filter).sort({ _id: 1 }).limit(100).populate("sender", "displayName username avatarUrl").lean();
     res.json({ signals: signals.map((s) => ({ id: s._id.toString(), senderId: s.sender._id.toString(), senderName: s.sender.displayName || s.sender.username, senderAvatar: s.sender.avatarUrl || null, type: s.type, payload: s.payload })) });
   } catch { res.status(400).json({ error: "Could not receive call signals" }); }
+});
+
+app.post("/v1/conversations/:id/block", auth, async (req, res) => {
+  const conversation = await Conversation.findOne({ _id: req.params.id, members: req.auth.sub });
+  if (!conversation || conversation.isGroup) return res.status(400).json({ error: "Only direct contacts can be blocked" });
+  const otherId = conversation.members.find((id) => id.toString() !== req.auth.sub);
+  if (!otherId) return res.sendStatus(400);
+  const blocked = req.body.blocked !== false;
+  await User.updateOne({ _id: req.auth.sub }, blocked ? { $addToSet: { blockedUsers: otherId } } : { $pull: { blockedUsers: otherId } });
+  res.json({ ok: true, blocked });
 });
 
 // API routes must always return API responses. Keeping the SPA after every

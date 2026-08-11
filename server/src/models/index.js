@@ -16,6 +16,7 @@ const userSchema = new mongoose.Schema({
   loginLastSentAt: { type: Date, select: false },
   loginAttempts: { type: Number, default: 0, select: false },
   trustedDevices: [{ deviceHash: String, verifiedAt: Date, lastUsedAt: Date }],
+  blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   passwordResetCodeHash: { type: String, select: false },
   passwordResetExpiresAt: { type: Date, select: false },
   passwordResetAttempts: { type: Number, default: 0, select: false },

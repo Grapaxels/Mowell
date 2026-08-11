@@ -262,7 +262,14 @@ async function enterWorkspace() {
 async function loadConversations() {
   const [data, requestData] = await Promise.all([api('/v1/conversations'), api('/v1/connections/requests').catch(() => ({ requests: [] }))]);
   state.connectionRequests = requestData.requests || [];
-  const incoming = data.conversations || [];
+  const incoming = (data.conversations || []).filter((conversation) => {
+    const id = conversationId(conversation);
+    const hiddenAt = Number(localStorage.getItem(`mowell_hide_${id}`) || 0);
+    const stamp = new Date(conversation.lastMessageAt || conversation.updatedAt || 0).getTime();
+    if (hiddenAt && stamp <= hiddenAt) return false;
+    if (hiddenAt) localStorage.removeItem(`mowell_hide_${id}`);
+    return true;
+  });
   const changed = [];
   for (const conversation of incoming) {
     conversation._lastMessage = conversation.lastMessage || conversation._lastMessage || null;
@@ -396,7 +403,8 @@ async function loadMessages({ preserve = false } = {}) {
   try {
     const data = await api(`/v1/conversations/${conversationId(state.active)}/messages?markRead=true`);
     const before = state.messages.at(-1)?._id;
-    state.messages = data.messages || [];
+    const clearedAt = Number(localStorage.getItem(`mowell_clear_${conversationId(state.active)}`) || 0);
+    state.messages = (data.messages || []).filter((message) => new Date(message.sentAt || message.createdAt || 0).getTime() > clearedAt);
     state.active._lastMessage = state.messages.at(-1);
     renderMessages(preserve && before === state.messages.at(-1)?._id);
     renderList();
@@ -1010,10 +1018,27 @@ $('chat-more').onclick = () => {
   $('conversation-profile-avatar').innerHTML = avatarMarkup(title, avatarUrl(state.active));
   $('conversation-profile-name').textContent = title;
   $('conversation-profile-kind').textContent = state.active.isGroup ? 'Mowell group conversation' : 'Mowell contact';
+  $('conversation-block').classList.toggle('hidden', Boolean(state.active.isGroup));
   $('conversation-dialog').showModal();
 };
 $('conversation-voice-call').onclick = () => { $('conversation-dialog').close(); startCall(false); };
 $('conversation-video-call').onclick = () => { $('conversation-dialog').close(); startCall(true); };
+$('conversation-clear').onclick = async () => {
+  if (!state.active) return;
+  if (!call.closed && conversationId(call.conversation) === conversationId(state.active)) await endCall(true);
+  localStorage.setItem(`mowell_clear_${conversationId(state.active)}`, String(Date.now()));
+  state.messages = []; renderMessages(false); $('conversation-dialog').close();
+};
+$('conversation-delete').onclick = () => {
+  if (!state.active) return;
+  localStorage.setItem(`mowell_hide_${conversationId(state.active)}`, String(new Date(state.active.lastMessageAt || state.active.updatedAt || Date.now()).getTime()));
+  const removed = conversationId(state.active); state.active = null; state.conversations = state.conversations.filter((item) => conversationId(item) !== removed); state.lastListHtml = ''; renderList(); $('chat-pane').classList.add('hidden'); $('empty-pane').classList.remove('hidden'); $('conversation-dialog').close();
+};
+$('conversation-block').onclick = async () => {
+  if (!state.active || state.active.isGroup) return;
+  await api(`/v1/conversations/${conversationId(state.active)}/block`, { method: 'POST', body: JSON.stringify({ blocked: true }) });
+  toast('User blocked'); $('conversation-dialog').close();
+};
 $('show-web-qr-login').onclick = openWebQr;
 $('show-web-qr-account').onclick = () => { $('account-dialog').close(); openWebQr(); };
 $('logout-button').onclick = () => clearSession();

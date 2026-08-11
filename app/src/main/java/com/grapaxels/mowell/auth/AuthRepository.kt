@@ -374,6 +374,17 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun blockConversation(conversationId: String, blocked: Boolean = true): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Not signed in")
+            val body = JSONObject().put("blocked", blocked)
+            client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/block").header("Authorization", "Bearer ${session.token}").post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not block user"))
+            }
+        }
+    }
+
     private fun parseMessage(item: JSONObject, conversationId: String, session: AuthSession): RemoteMessage {
         val senderObject = item.optJSONObject("sender")
         val senderId = senderObject?.optString("_id").orEmpty()

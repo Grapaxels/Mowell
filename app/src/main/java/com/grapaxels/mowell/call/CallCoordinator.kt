@@ -20,4 +20,5 @@ object CallCoordinator {
     fun endIfActive(@Suppress("UNUSED_PARAMETER") context: Context, room: String) {
         MowellCallActivity.endRoom(room)
     }
+    fun hangupConversation(conversationId: String) = MowellCallActivity.hangupConversation(conversationId)
 }

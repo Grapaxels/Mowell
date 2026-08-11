@@ -458,6 +458,7 @@ private fun RowScope.Nav(target: Page, selected: Page, label: String, icon: Imag
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) -> Unit) {
     val conversations by vm.conversations.collectAsStateWithLifecycle()
@@ -465,6 +466,16 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
     val connectionRequests by vm.connectionRequests.collectAsStateWithLifecycle()
     var peopleQuery by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(ChatFilter.ALL) }
+    var selectedConversation by remember { mutableStateOf<ConversationEntity?>(null) }
+    selectedConversation?.let { conversation ->
+        AlertDialog(onDismissRequest = { selectedConversation = null }, title = { Text(conversation.title, fontWeight = FontWeight.Black) }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { vm.clearChat(conversation.id); selectedConversation = null }, Modifier.fillMaxWidth()) { Text("Clear chat") }
+                OutlinedButton(onClick = { vm.deleteChat(conversation); selectedConversation = null }, Modifier.fillMaxWidth()) { Text("Delete chat") }
+                if (!conversation.isGroup) Button(onClick = { vm.blockUser(conversation.id); selectedConversation = null }, Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD63C4B))) { Text("Block user") }
+            }
+        }, confirmButton = {}, dismissButton = { OutlinedButton(onClick = { selectedConversation = null }) { Text("Cancel") } })
+    }
     val visibleConversations = when (filter) {
         ChatFilter.ALL -> conversations
         ChatFilter.UNREAD -> conversations.filter { it.unreadCount > 0 }
@@ -511,7 +522,7 @@ private fun ChatsScreen(vm: MowellViewModel, modifier: Modifier, open: (String) 
             }
             if (users.isEmpty()) item { Text("No matching people found.", color = Muted, modifier = Modifier.padding(10.dp)) }
         } else {
-            items(visibleConversations, key = { it.id }) { conversation -> ConversationClay(conversation) { open(conversation.id) } }
+            items(visibleConversations, key = { it.id }) { conversation -> ConversationClay(conversation, { open(conversation.id) }, { selectedConversation = conversation }) }
             if (visibleConversations.isEmpty()) item { Text(if (filter == ChatFilter.UNREAD) "You are all caught up." else "No conversations here yet.", color = Muted, modifier = Modifier.fillMaxWidth().padding(28.dp)) }
         }
     }
@@ -529,10 +540,11 @@ private fun RowScope.FilterPill(label: String, selected: Boolean, onClick: () ->
     ) { Text(label, color = if (selected) VioletDark else Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit) {
+private fun ConversationClay(conversation: ConversationEntity, onClick: () -> Unit, onLongClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 74.dp).clip(RoundedCornerShape(18.dp)).background(if (conversation.unreadCount > 0) Lavender.copy(alpha = .58f) else Color.Transparent).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 9.dp),
+        Modifier.fillMaxWidth().heightIn(min = 74.dp).clip(RoundedCornerShape(18.dp)).background(if (conversation.unreadCount > 0) Lavender.copy(alpha = .58f) else Color.Transparent).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(horizontal = 10.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Avatar(conversation.title, 52.dp, if (conversation.isGroup) Violet else Ink, conversation.avatarUrl)

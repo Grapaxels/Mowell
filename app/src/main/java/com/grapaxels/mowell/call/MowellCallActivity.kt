@@ -26,12 +26,18 @@ import java.lang.ref.WeakReference
 class MowellCallActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var room: String
+    private lateinit var conversationId: String
 
     companion object {
         private var current = WeakReference<MowellCallActivity>(null)
         fun endRoom(room: String) {
             current.get()?.takeIf { it.room == room }?.let { activity ->
                 activity.runOnUiThread { activity.remoteEnded() }
+            }
+        }
+        fun hangupConversation(conversationId: String) {
+            current.get()?.takeIf { it.conversationId == conversationId }?.let { activity ->
+                activity.runOnUiThread { activity.webView.evaluateJavascript("window.mowellHangup && window.mowellHangup()", null) }
             }
         }
     }
@@ -41,6 +47,7 @@ class MowellCallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         room = intent.getStringExtra("room").orEmpty()
         val conversation = intent.getStringExtra("conversation").orEmpty()
+        conversationId = conversation
         val auth = AuthRepository(this).savedSession
         if (room.isBlank() || conversation.isBlank() || auth == null) {
             finish()
