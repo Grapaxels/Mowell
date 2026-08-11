@@ -1,5 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const API = location.hostname === 'mowellweb.grapaxels.in' ? 'https://mowell-api.grapaxels.in' : location.origin;
+const DEVICE_ID = localStorage.getItem('mowell_web_device_id') || (crypto.randomUUID ? crypto.randomUUID() : `web-${Date.now()}-${Math.random()}`);
+localStorage.setItem('mowell_web_device_id', DEVICE_ID);
 const state = {
   token: localStorage.getItem('mowell_web_token') || sessionStorage.getItem('mowell_web_token'),
   me: null,
@@ -90,7 +92,7 @@ function dayLabel(value) {
 }
 function preview(message) {
   if (!message) return 'Start a conversation';
-  const map = { image: 'Photo', video: 'Video', audio: 'Voice message', file: message.attachment?.fileName || message.body || 'Document', location: 'Location', contact: 'Contact', call: 'Incoming call', call_end: 'Call ended' };
+  const map = { image: 'Photo', video: 'Video', audio: 'Voice message', file: message.attachment?.fileName || message.body || 'Document', location: 'Location', contact: 'Contact', sticker: `Sticker ${message.body || ''}`, call: 'Incoming call', call_end: 'Call ended' };
   return map[message.kind] || message.body || 'Message';
 }
 
@@ -132,7 +134,12 @@ async function login(event) {
   setError('auth-error');
   setLoading($('login-button'), true);
   try {
-    const data = await api('/v1/auth/login', { method: 'POST', body: JSON.stringify({ identity: $('identity').value.trim(), password: $('password').value }) });
+    const data = await api('/v1/auth/login', { method: 'POST', body: JSON.stringify({ identity: $('identity').value.trim(), password: $('password').value, deviceId: DEVICE_ID }) });
+    if (data.verificationRequired) {
+      openVerification(data.email);
+      return;
+    }
+    if (!data.token || !data.user) throw new Error('The server did not complete sign-in. Deploy the latest Mowell server.');
     saveSession(data.token, $('remember').checked);
     state.me = data.user;
     await enterWorkspace();
@@ -171,7 +178,7 @@ async function verifyEmail(event) {
   setLoading($('verify-button'), true);
   setError('verify-error');
   try {
-    const data = await api('/v1/auth/verify-email', { method: 'POST', body: JSON.stringify({ email: $('verify-email').value, code: $('verify-code').value.trim() }) });
+    const data = await api('/v1/auth/verify-email', { method: 'POST', body: JSON.stringify({ email: $('verify-email').value, code: $('verify-code').value.trim(), deviceId: DEVICE_ID }) });
     saveSession(data.token, true);
     state.me = data.user;
     $('verify-dialog').close();
@@ -203,6 +210,12 @@ async function resetPassword(event) {
 
 async function boot() {
   document.body.classList.toggle('dark', localStorage.getItem('mowell_web_theme') === 'dark');
+  if (matchMedia('(max-width: 600px) and (pointer: coarse)').matches) {
+    $('phone-download').classList.remove('hidden');
+    try { const release = await api('/v1/app/version'); $('latest-apk-link').href = release.apkUrl; $('latest-apk-version').textContent = `Latest version ${release.versionName}`; }
+    catch { $('latest-apk-version').textContent = 'Latest Android release'; }
+    return;
+  }
   if (!state.token) return;
   try {
     state.me = (await api('/v1/me')).user;
@@ -363,6 +376,7 @@ function mediaMarkup(message) {
 
 function contentMarkup(message) {
   const data = parseBody(message);
+  if (message.kind === 'sticker') return `<span class="sticker-message" aria-label="Animated sticker">${escapeHtml(message.body)}</span>`;
   if (['image', 'video', 'audio', 'file'].includes(message.kind)) return mediaMarkup(message);
   if (message.kind === 'location') {
     const lat = Number(data.latitude), lon = Number(data.longitude);
@@ -564,8 +578,8 @@ async function loadIceConfiguration() {
 function hdVideoConstraints(facingMode, exact = false) {
   return {
     facingMode: exact ? { exact: facingMode } : { ideal: facingMode },
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
+    width: { min: 1280, ideal: 3840 },
+    height: { min: 720, ideal: 2160 },
     aspectRatio: { ideal: 16 / 9 },
     frameRate: { ideal: 30, max: 30 }
   };
@@ -594,7 +608,7 @@ async function tuneSender(sender, kind, screen = false) {
     if (!parameters.encodings?.length) parameters.encodings = [{}];
     if (kind === 'video') {
       parameters.degradationPreference = screen ? 'maintain-resolution' : 'maintain-framerate';
-      parameters.encodings[0].maxBitrate = screen ? 6000000 : 5000000;
+      parameters.encodings[0].maxBitrate = screen ? 12000000 : 10000000;
       parameters.encodings[0].maxFramerate = 30;
       parameters.encodings[0].scaleResolutionDownBy = 1;
     } else {
@@ -897,6 +911,16 @@ async function flipCamera() {
   } catch { toast('Another camera is not available on this device.'); }
 }
 
+async function addCallMember() {
+  if (call.closed) return;
+  const username = prompt('Enter the exact Mowell username to add to this call:')?.trim().replace(/^@/, '').toLowerCase();
+  if (!username) return;
+  const button = $('add-call-member'); setLoading(button, true);
+  try { const result = await api(`/v1/calls/${encodeURIComponent(call.room)}/invite`, { method: 'POST', body: JSON.stringify({ username }) }); toast(`Invited ${result.displayName || username}`); }
+  catch (error) { toast(error.message); }
+  finally { setLoading(button, false); }
+}
+
 function startPolling() {
   if (state.polling) return;
   state.polling = true;
@@ -939,6 +963,11 @@ $('send-button').onclick = submitComposer;
 $('message-input').addEventListener('input', () => { updateComposer(); setTyping(Boolean($('message-input').value.trim())); });
 $('message-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitComposer(); } });
 $('attach-button').onclick = () => $('file-input').click();
+$('sticker-button').onclick = () => $('sticker-picker').classList.toggle('hidden');
+document.querySelectorAll('#sticker-picker button').forEach((button) => button.onclick = async () => {
+  $('sticker-picker').classList.add('hidden');
+  await sendMessage(button.textContent, 'sticker');
+});
 $('file-input').onchange = () => { uploadFile($('file-input').files[0]); $('file-input').value = ''; };
 $('location-button').onclick = shareLocation;
 $('record-button').onclick = toggleRecording;
@@ -951,6 +980,7 @@ $('hangup-call').onclick = () => endCall(true);
 $('mute-call').onclick = toggleMute;
 $('camera-call').onclick = toggleCamera;
 $('flip-call').onclick = flipCamera;
+$('add-call-member').onclick = addCallMember;
 $('share-screen-call').onclick = toggleScreenShare;
 window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
 

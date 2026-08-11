@@ -8,10 +8,11 @@
   <title>Mowell Web</title>
   <link rel="icon" href="/mowell_logo.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/styles.css?v=242-web-5">
-  <script defer src="/app.js?v=242-web-5"></script>
+  <link rel="stylesheet" href="/styles.css?v=245-web-1">
+  <script defer src="/app.js?v=245-web-1"></script>
 </head>
 <body>
+  <section id="phone-download" class="phone-download hidden"><div class="phone-download-card"><img src="/mowell_logo.png" alt="Mowell"><span class="eyebrow">MOWELL FOR ANDROID</span><h1>Continue in the Mowell app</h1><p>Mowell Web is designed for laptops and tablets. Install the latest secure Android app on this phone.</p><a id="latest-apk-link" class="primary wide" href="https://mowell-api.grapaxels.in/Mowell-v2.4.5.apk">Download Mowell</a><small id="latest-apk-version">Checking latest version…</small></div></section>
   <svg class="svg-sprite" aria-hidden="true">
     <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4V4Z"/></symbol>
     <symbol id="i-call" viewBox="0 0 24 24"><path d="M7 3 4 5c0 8 7 15 15 15l2-3-5-3-2 2c-3-1-5-3-6-6l2-2-3-5Z"/></symbol>
@@ -108,6 +109,7 @@
       <div id="reply-bar" class="reply-bar hidden"><div><b>Replying to</b><span id="reply-text"></span></div><button id="cancel-reply" class="icon-button"><svg><use href="#i-close"/></svg></button></div>
       <footer class="composer">
         <button id="attach-button" class="icon-button" title="Attach file"><svg><use href="#i-paperclip"/></svg></button><input id="file-input" type="file" hidden>
+        <button id="sticker-button" class="icon-button" title="Animated stickers" aria-label="Animated stickers">☺</button>
         <textarea id="message-input" rows="1" placeholder="Message" maxlength="8000"></textarea>
         <button id="location-button" class="icon-button optional-action" title="Share location"><svg><use href="#i-location"/></svg></button>
         <button id="record-button" class="icon-button record-button" title="Record voice message"><svg><use href="#i-mic"/></svg><span class="record-time"></span></button>
@@ -115,6 +117,8 @@
       </footer>
     </section>
   </main>
+
+  <div id="sticker-picker" class="sticker-picker hidden" role="dialog" aria-label="Animated stickers"><button>😀</button><button>😂</button><button>😍</button><button>🥳</button><button>😎</button><button>🤗</button><button>👍</button><button>❤️</button></div>
 
   <dialog id="verify-dialog" class="modal"><form id="verify-form" method="dialog"><span class="eyebrow">EMAIL VERIFICATION</span><h2>Enter your code</h2><p id="verify-copy" class="muted"></p><input id="verify-email" type="hidden"><label class="field"><span>Six-digit code</span><input id="verify-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" required placeholder="000000"></label><button id="verify-button" class="primary wide" value="default"><span>Verify email</span><span class="button-spinner"></span></button><button id="resend-code" class="link dialog-link" type="button">Send a new code</button><p id="verify-error" class="form-error"></p></form></dialog>
 
@@ -136,7 +140,7 @@
     <div id="remote-videos" class="remote-videos"><div class="call-waiting"><div class="pulse-avatar" id="call-avatar">M</div><h2 id="call-name">Mowell user</h2><p id="call-status">Connecting…</p></div></div>
     <video id="local-video" class="local-video" autoplay muted playsinline></video>
     <div class="call-top"><span id="call-timer">00:00</span></div>
-    <div class="call-controls"><button id="mute-call" class="control-button"><svg><use href="#i-mic"/></svg><span>Mute</span></button><button id="camera-call" class="control-button"><svg><use href="#i-video"/></svg><span>Camera</span></button><button id="flip-call" class="control-button"><svg><use href="#i-flip"/></svg><span>Flip</span></button><button id="share-screen-call" class="control-button"><svg><use href="#i-screen-share"/></svg><span>Share</span></button><button id="hangup-call" class="control-button hangup"><svg><use href="#i-call"/></svg><span>End</span></button></div>
+    <div class="call-controls"><button id="mute-call" class="control-button"><svg><use href="#i-mic"/></svg><span>Mute</span></button><button id="camera-call" class="control-button"><svg><use href="#i-video"/></svg><span>Camera</span></button><button id="flip-call" class="control-button"><svg><use href="#i-flip"/></svg><span>Flip</span></button><button id="add-call-member" class="control-button"><svg><use href="#i-users"/></svg><span>Add</span></button><button id="share-screen-call" class="control-button"><svg><use href="#i-screen-share"/></svg><span>Share</span></button><button id="hangup-call" class="control-button hangup"><svg><use href="#i-call"/></svg><span>End</span></button></div>
   </section>
 
   <div id="toast" class="toast hidden" role="status"></div>

@@ -20,6 +20,7 @@ if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must contain
 
 if (mongoose.connection.readyState === 0) await mongoose.connect(mongoUri, { autoIndex: true });
 const app = express();
+app.use((_req, res, next) => { res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), geolocation=(self)"); next(); });
 const webRoot = fileURLToPath(new URL("../web", import.meta.url));
 const webIndex = fileURLToPath(new URL("../web/index.html", import.meta.url));
 const publicRoot = fileURLToPath(new URL("../public", import.meta.url));
@@ -46,7 +47,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.4.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.5.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -78,6 +79,14 @@ const disposableDomains = new Set([
   ...String(process.env.BLOCKED_EMAIL_DOMAINS || "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean)
 ]);
 const emailCodeHash = (email, code) => crypto.createHmac("sha256", process.env.JWT_SECRET).update(`${email}:${code}`).digest("hex");
+const deviceHash = (value) => crypto.createHmac("sha256", process.env.JWT_SECRET).update(`device:${String(value || "")}`).digest("hex");
+const trustedForMs = 15 * 24 * 60 * 60 * 1000;
+const trustDevice = (user, value) => {
+  if (!value) return;
+  const hash = deviceHash(value), now = new Date();
+  user.trustedDevices = (user.trustedDevices || []).filter((item) => item.deviceHash !== hash && now - new Date(item.verifiedAt) < trustedForMs).slice(-9);
+  user.trustedDevices.push({ deviceHash: hash, verifiedAt: now, lastUsedAt: now });
+};
 const smtpSettings = () => {
   const user = String(process.env.SMTP_USER || process.env.EMAIL_USER || process.env.MAIL_USER || "").trim();
   // Google displays App Passwords in groups. Removing whitespace makes either
@@ -213,10 +222,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 44,
-  versionName: "2.4.4",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.4.apk",
-  sha256: "05A0E80E6F74AFC4C46ACC53BB508387733B030A47C21666090B4F891923E779",
+  versionCode: 45,
+  versionName: "2.4.5",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.5.apk",
+  sha256: "A0912B52431F9DB900ACDA8FF47BD06B477F5700687495AE8A175477048F652B",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 
@@ -248,6 +257,7 @@ app.post("/v1/auth/register", async (req, res) => {
 
 app.post("/v1/auth/login", async (req, res) => {
   const identity = String(req.body.identity || "").trim().toLowerCase();
+  const deviceId = String(req.body.deviceId || "").trim();
   const user = await User.findOne({ $or: [{ email: identity }, { username: identity }] }).select("+passwordHash +verificationCodeHash +verificationExpiresAt +verificationLastSentAt +verificationAttempts +loginCodeHash +loginExpiresAt +loginLastSentAt +loginAttempts");
   if (!user?.passwordHash || !(await bcrypt.compare(String(req.body.password || ""), user.passwordHash))) {
     return res.status(401).json({ error: "Incorrect email, username, or password" });
@@ -257,6 +267,12 @@ app.post("/v1/auth/login", async (req, res) => {
     catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
     return res.status(403).json({ error: "Verify your email to continue", verificationRequired: true, email: user.email });
   }
+  const now = new Date();
+  const trusted = deviceId && (user.trustedDevices || []).find((item) => item.deviceHash === deviceHash(deviceId) && now - new Date(item.verifiedAt) < trustedForMs);
+  if (trusted) {
+    trusted.lastUsedAt = now; user.lastSeenAt = now; await user.save();
+    return res.json({ token: issueToken(user), user: publicUser(user), trustedDevice: true });
+  }
   try { await sendLoginCode(user, true); }
   catch (error) { logMailError(error); return res.status(503).json({ error: publicMailError(error) }); }
   res.status(202).json({ verificationRequired: true, loginVerificationRequired: true, email: user.email, message: "Login code sent" });
@@ -265,6 +281,7 @@ app.post("/v1/auth/login", async (req, res) => {
 app.post("/v1/auth/verify-email", async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const code = String(req.body.code || "").trim();
+  const deviceId = String(req.body.deviceId || "").trim();
   const user = await User.findOne({ email }).select("+verificationCodeHash +verificationExpiresAt +verificationAttempts +loginCodeHash +loginExpiresAt +loginAttempts");
   if (!user) return res.status(400).json({ error: "Verification request is invalid" });
   if (user.emailVerified && user.loginCodeHash) {
@@ -274,7 +291,7 @@ app.post("/v1/auth/verify-email", async (req, res) => {
     const suppliedLogin = Buffer.from(emailCodeHash(email, `login:${code}`), "hex");
     const expectedLogin = Buffer.from(user.loginCodeHash, "hex");
     if (suppliedLogin.length !== expectedLogin.length || !crypto.timingSafeEqual(suppliedLogin, expectedLogin)) { await user.save(); return res.status(400).json({ error: "Incorrect login code" }); }
-    user.loginCodeHash = undefined; user.loginExpiresAt = undefined; user.loginAttempts = 0; user.lastSeenAt = new Date();
+    user.loginCodeHash = undefined; user.loginExpiresAt = undefined; user.loginAttempts = 0; user.lastSeenAt = new Date(); trustDevice(user, deviceId);
     await user.save();
     return res.json({ token: issueToken(user), user: publicUser(user) });
   }
@@ -285,7 +302,7 @@ app.post("/v1/auth/verify-email", async (req, res) => {
   const supplied = Buffer.from(emailCodeHash(email, code), "hex");
   const expected = Buffer.from(user.verificationCodeHash, "hex");
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) { await user.save(); return res.status(400).json({ error: "Incorrect verification code" }); }
-  user.emailVerified = true; user.verificationCodeHash = undefined; user.verificationExpiresAt = undefined; user.verificationAttempts = 0;
+  user.emailVerified = true; user.verificationCodeHash = undefined; user.verificationExpiresAt = undefined; user.verificationAttempts = 0; trustDevice(user, deviceId);
   await user.save();
   res.json({ token: issueToken(user), user: publicUser(user) });
 });

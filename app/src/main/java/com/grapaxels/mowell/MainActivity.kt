@@ -188,6 +188,10 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         sendTyped(conversationId, body, "text")
     }
 
+    fun sendSticker(conversationId: String, sticker: String) {
+        sendTyped(conversationId, sticker, "sticker")
+    }
+
     fun sendReply(conversationId: String, body: String, reply: MessageEntity) {
         val preview = reply.body.replace('\n', ' ').take(90)
         sendTyped(conversationId, "↩ ${reply.sender}: $preview\n${body.trim()}", "text")
@@ -400,6 +404,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         "file" -> message.attachmentName ?: "File"
         "location" -> "Location"
         "contact" -> "Contact"
+        "sticker" -> "Sticker ${message.body}"
         "call" -> if (message.body.contains("\"video\":true")) "Video call" else "Voice call"
         "call_end" -> "Call ended"
         else -> message.body

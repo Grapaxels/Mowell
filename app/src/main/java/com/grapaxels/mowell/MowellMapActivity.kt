@@ -40,7 +40,7 @@ class MowellMapActivity : ComponentActivity() {
                         settings.loadsImagesAutomatically = true
                         settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         webViewClient = WebViewClient()
-                        loadUrl(mapUrl(latitude, longitude))
+                        loadDataWithBaseURL("https://www.openstreetmap.org/", mapHtml(latitude, longitude, true), "text/html", "UTF-8", null)
                     }
                 })
                 IconButton(onClick = { finish() }, Modifier.align(Alignment.TopStart).padding(18.dp).clip(CircleShape).background(Color.White)) {

@@ -9,6 +9,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.util.UUID
 
 data class UserProfile(
     val id: String,
@@ -38,6 +39,7 @@ class AuthRepository(context: Context) {
     private val prefs = context.getSharedPreferences("mowell_session", Context.MODE_PRIVATE)
     private val client = OkHttpClient()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
+    private val deviceId: String = prefs.getString("trusted_device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("trusted_device_id", it).apply() }
 
     var serverUrl: String
         get() = "https://mowell-api.grapaxels.in"
@@ -59,7 +61,7 @@ class AuthRepository(context: Context) {
         }
 
     suspend fun login(identity: String, password: String): AuthResult = postAuth(
-        "/v1/auth/login", JSONObject().put("identity", identity).put("password", password)
+        "/v1/auth/login", JSONObject().put("identity", identity).put("password", password).put("deviceId", deviceId)
     )
 
     suspend fun register(email: String, username: String, displayName: String, password: String): AuthResult = postAuth(
@@ -70,7 +72,7 @@ class AuthRepository(context: Context) {
     suspend fun google(idToken: String): AuthResult = postAuth("/v1/auth/google", JSONObject().put("idToken", idToken))
 
     suspend fun verifyEmail(email: String, code: String): AuthResult = postAuth(
-        "/v1/auth/verify-email", JSONObject().put("email", email).put("code", code)
+        "/v1/auth/verify-email", JSONObject().put("email", email).put("code", code).put("deviceId", deviceId)
     )
 
     suspend fun resendVerification(email: String): AuthResult = withContext(Dispatchers.IO) {

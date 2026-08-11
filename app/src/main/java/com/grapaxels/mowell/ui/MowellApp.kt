@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,6 +68,7 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Settings
@@ -133,6 +135,7 @@ import com.grapaxels.mowell.MowellViewModel
 import com.grapaxels.mowell.CallSession
 import com.grapaxels.mowell.BuildConfig
 import com.grapaxels.mowell.MowellMapActivity
+import com.grapaxels.mowell.mapHtml
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
@@ -341,7 +344,7 @@ private fun MainExperience(vm: MowellViewModel) {
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
         else -> Scaffold(
             containerColor = Canvas,
-            topBar = { ClayHeader(vm) },
+            topBar = { ClayHeader(vm, onChats = { page = Page.CHATS }, onProfile = { page = Page.YOU }, onSettings = { page = Page.YOU }, onLinkedDevices = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mowellweb.grapaxels.in"))) }) },
             bottomBar = {
                 NavigationBar(
                     containerColor = ClayWhite,
@@ -371,12 +374,22 @@ private fun MainExperience(vm: MowellViewModel) {
 }
 
 @Composable
-private fun ClayHeader(vm: MowellViewModel) {
+private fun ClayHeader(vm: MowellViewModel, onChats: () -> Unit, onProfile: () -> Unit, onSettings: () -> Unit, onLinkedDevices: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().shadow(1.dp).background(ClayWhite).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         OrbLogo(40.dp); Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) { Text("Mowell", fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = (-0.6).sp); Text("from Grapaxels", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
         Row(Modifier.clip(RoundedCornerShape(50)).background(if (vm.networkLabel().startsWith("Internet")) Color(0xFFE8F8EF) else Lavender).padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(if (vm.networkLabel().startsWith("Internet")) Icons.Rounded.Wifi else Icons.Rounded.Bluetooth, null, tint = if (vm.networkLabel().startsWith("Internet")) Color(0xFF24975A) else Violet, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(if (vm.networkLabel().startsWith("Internet")) "Online" else "Nearby", color = if (vm.networkLabel().startsWith("Internet")) Color(0xFF247C4D) else VioletDark, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        Box {
+            IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More options", tint = Ink) }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text("Profile") }, leadingIcon = { Icon(Icons.Rounded.Person, null) }, onClick = { menu = false; onProfile() })
+                DropdownMenuItem(text = { Text("Lists") }, leadingIcon = { Icon(Icons.Rounded.ChatBubble, null) }, onClick = { menu = false; onChats() })
+                DropdownMenuItem(text = { Text("Linked devices") }, leadingIcon = { Icon(Icons.Rounded.Videocam, null) }, onClick = { menu = false; onLinkedDevices() })
+                DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Icon(Icons.Rounded.Settings, null) }, onClick = { menu = false; onSettings() })
+            }
         }
     }
 }
@@ -681,6 +694,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     var searchOpen by remember { mutableStateOf(false) }
     var chatQuery by remember { mutableStateOf("") }
     var headerMenu by remember { mutableStateOf(false) }
+    var stickerPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -738,6 +752,21 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
             confirmButton = {}, dismissButton = { OutlinedButton(onClick = { deleteTarget = null }) { Text("Cancel") } }
         )
     }
+    if (stickerPicker) AlertDialog(
+        onDismissRequest = { stickerPicker = false },
+        title = { Text("Animated stickers", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("😀", "😂", "😍", "🥳", "😎", "🤗", "👍", "❤️").chunked(4).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        row.forEach { sticker -> Text(sticker, fontSize = 34.sp, modifier = Modifier.clickable { vm.sendSticker(conversationId, sticker); stickerPicker = false }.padding(7.dp)) }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { OutlinedButton(onClick = { stickerPicker = false }) { Text("Close") } }
+    )
     LaunchedEffect(conversationId) {
         vm.markConversationRead(conversationId)
         while (true) { vm.syncConversation(conversationId); vm.refreshTyping(conversationId); delay(1_000) }
@@ -819,6 +848,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
                         DropdownMenuItem(text = { Text("Photo, video or file") }, leadingIcon = { Icon(Icons.Rounded.Description, null) }, onClick = { attachments = false; filePicker.launch("*/*") })
                         DropdownMenuItem(text = { Text("Current location") }, leadingIcon = { Icon(Icons.Rounded.LocationOn, null) }, onClick = { attachments = false; vm.shareLocation(conversationId) })
                         DropdownMenuItem(text = { Text("Contact") }, leadingIcon = { Icon(Icons.Rounded.ContactPhone, null) }, onClick = { attachments = false; contactPicker.launch(null) })
+                        DropdownMenuItem(text = { Text("Animated sticker") }, leadingIcon = { Text("☺", fontSize = 22.sp) }, onClick = { attachments = false; stickerPicker = true })
                     }
                 }
                 Spacer(Modifier.width(7.dp))
@@ -844,7 +874,8 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState, contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             if (chatQuery.isNotBlank() && displayedMessages.isEmpty()) item(key = "no-search-results") { Text("No matching messages or files", color = Muted, modifier = Modifier.fillMaxWidth().padding(24.dp)) }
-            items(displayedMessages, key = { it.id }) { message ->
+            itemsIndexed(displayedMessages, key = { _, message -> message.id }) { index, message ->
+                if (index == 0 || dayKey(displayedMessages[index - 1].sentAt) != dayKey(message.sentAt)) DayBadge(dayLabel(message.sentAt))
                 val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
                 MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { deleteTarget = message }, openAttachment = { vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
             }
@@ -863,7 +894,18 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 when (message.kind) {
-                    "image", "video", "audio", "file" -> {
+                    "sticker" -> AnimatedSticker(message.body)
+                    "audio" -> {
+                        Row(Modifier.fillMaxWidth().clickable(enabled = message.attachmentId != null, onClick = openAttachment), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(42.dp).clip(CircleShape).background(if (message.outgoing) Color.White.copy(alpha = .2f) else Lavender), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.PlayArrow, "Play voice message", tint = if (message.outgoing) Color.White else Violet) }
+                            Spacer(Modifier.width(9.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) { repeat(15) { bar -> Box(Modifier.width(3.dp).height((7 + (bar * 7 % 18)).dp).clip(CircleShape).background(if (message.outgoing) Color.White.copy(alpha = .72f) else Violet.copy(alpha = .65f))) } }
+                                Text(if (message.delivery == "uploading") "Uploading…" else "Voice message", color = if (message.outgoing) Color.White.copy(alpha = .78f) else Muted, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                    "image", "video", "file" -> {
                         Icon(Icons.Rounded.AttachFile, null, tint = if (message.outgoing) Lime else Violet)
                         Text(message.attachmentName ?: message.body, color = foreground, fontWeight = FontWeight.Bold)
                         Text(if (message.delivery == "uploading") "Uploading…" else "Tap to open", color = if (message.outgoing) Color.White.copy(alpha = .75f) else Muted, fontSize = 11.sp, modifier = Modifier.clickable(enabled = message.attachmentId != null, onClick = openAttachment))
@@ -879,7 +921,7 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                                     settings.javaScriptEnabled = true
                                     settings.domStorageEnabled = true
                                     webViewClient = WebViewClient()
-                                    loadUrl(mapUrl(lat, lon))
+                                    loadDataWithBaseURL("https://www.openstreetmap.org/", mapHtml(lat, lon, false), "text/html", "UTF-8", null)
                                 }
                             })
                             Box(Modifier.fillMaxSize().clickable {
@@ -909,7 +951,10 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                     "call_end" -> Text("Call ended", color = foreground, fontWeight = FontWeight.Bold)
                     else -> Text(message.body, color = foreground)
                 }
-                Row(Modifier.align(Alignment.End)) { Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .7f) else Muted, fontSize = 9.sp); Spacer(Modifier.width(5.dp)); Text(route(message.route), color = if (message.outgoing) Lime else Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+                Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                    Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .7f) else Muted, fontSize = 9.sp)
+                    if (message.outgoing) { Spacer(Modifier.width(5.dp)); Text(deliveryTicks(message.delivery), color = if (message.delivery.equals("seen", true) || message.delivery.equals("read", true)) Color(0xFF66D7FF) else Color.White.copy(alpha = .76f), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                }
             }
         }
     }
@@ -952,6 +997,25 @@ private fun Avatar(name: String, size: Dp, color: Color, avatarUrl: String? = nu
 }
 
 private fun time(timestamp: Long) = if (timestamp == 0L) "now" else SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+private fun dayKey(timestamp: Long) = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(timestamp))
+private fun dayLabel(timestamp: Long): String {
+    val target = dayKey(timestamp)
+    val today = dayKey(System.currentTimeMillis())
+    val yesterday = dayKey(System.currentTimeMillis() - 86_400_000L)
+    return when (target) { today -> "Today"; yesterday -> "Yesterday"; else -> SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(timestamp)) }
+}
+
+@Composable
+private fun DayBadge(label: String) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { Text(label, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clip(RoundedCornerShape(99.dp)).background(ClayWhite).border(1.dp, Hairline, RoundedCornerShape(99.dp)).padding(horizontal = 12.dp, vertical = 5.dp)) } }
+
+@Composable
+private fun AnimatedSticker(value: String) {
+    val scale = remember(value) { Animatable(.35f) }
+    LaunchedEffect(value) { scale.animateTo(1f, tween(520, easing = FastOutSlowInEasing)); while (true) { scale.animateTo(.92f, tween(900)); scale.animateTo(1f, tween(900)) } }
+    Text(value, fontSize = 58.sp, modifier = Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value })
+}
+
+private fun deliveryTicks(delivery: String) = when (delivery.lowercase(Locale.US)) { "sending", "stored", "uploading" -> "✓"; "seen", "read" -> "✓✓"; else -> "✓✓" }
 private fun maskEmail(email: String): String {
     val local = email.substringBefore('@')
     val domain = email.substringAfter('@', "")

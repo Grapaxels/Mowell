@@ -15,6 +15,7 @@ const userSchema = new mongoose.Schema({
   loginExpiresAt: { type: Date, select: false },
   loginLastSentAt: { type: Date, select: false },
   loginAttempts: { type: Number, default: 0, select: false },
+  trustedDevices: [{ deviceHash: String, verifiedAt: Date, lastUsedAt: Date }],
   passwordResetCodeHash: { type: String, select: false },
   passwordResetExpiresAt: { type: Date, select: false },
   passwordResetAttempts: { type: Number, default: 0, select: false },
@@ -38,7 +39,7 @@ const messageSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   body: { type: String, required: true, maxlength: 8000 },
-  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "call", "call_end", "system"], default: "text" },
+  kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "sticker", "call", "call_end", "system"], default: "text" },
   attachment: { type: mongoose.Schema.Types.ObjectId, ref: "Media" },
   sentAt: { type: Date, default: Date.now }
 }, { timestamps: true });

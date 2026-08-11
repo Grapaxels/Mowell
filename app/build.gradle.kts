@@ -12,8 +12,8 @@ android {
         applicationId = "com.grapaxels.mowell"
         minSdk = 24
         targetSdk = 35
-        versionCode = 44
-        versionName = "2.4.4"
+        versionCode = 45
+        versionName = "2.4.5"
         buildConfigField("boolean", "SELF_UPDATE", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
