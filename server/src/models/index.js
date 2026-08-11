@@ -106,3 +106,13 @@ const callRoomSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 export const CallRoom = mongoose.model("CallRoom", callRoomSchema);
+
+const deviceLinkSchema = new mongoose.Schema({
+  tokenHash: { type: String, required: true, unique: true, index: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  status: { type: String, enum: ["pending", "approved"], default: "pending", index: true },
+  approvedAt: Date,
+  expiresAt: { type: Date, required: true, expires: 0 }
+}, { timestamps: true });
+
+export const DeviceLink = mongoose.model("DeviceLink", deviceLinkSchema);

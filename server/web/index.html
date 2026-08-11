@@ -8,11 +8,11 @@
   <title>Mowell Web</title>
   <link rel="icon" href="/mowell_logo.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/styles.css?v=245-web-2">
-  <script defer src="/app.js?v=245-web-2"></script>
+  <link rel="stylesheet" href="/styles.css?v=246-web-1">
+  <script defer src="/app.js?v=246-web-1"></script>
 </head>
 <body>
-  <section id="phone-download" class="phone-download hidden"><div class="phone-download-card"><img src="/mowell_logo.png" alt="Mowell"><span class="eyebrow">MOWELL FOR ANDROID</span><h1>Continue in the Mowell app</h1><p>Mowell Web is designed for laptops and tablets. Install the latest secure Android app on this phone.</p><a id="latest-apk-link" class="primary wide" href="https://mowell-api.grapaxels.in/Mowell-v2.4.5.apk">Download Mowell</a><small id="latest-apk-version">Checking latest version…</small></div></section>
+  <section id="phone-download" class="phone-download hidden"><div class="phone-download-card"><img src="/mowell_logo.png" alt="Mowell"><span class="eyebrow">MOWELL FOR ANDROID</span><h1>Continue in the Mowell app</h1><p>Mowell Web is designed for laptops and tablets. Install the latest secure Android app on this phone.</p><a id="latest-apk-link" class="primary wide" href="https://mowell-api.grapaxels.in/Mowell-v2.4.6.apk">Download Mowell</a><small id="latest-apk-version">Checking latest version…</small></div></section>
   <svg class="svg-sprite" aria-hidden="true">
     <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4V4Z"/></symbol>
     <symbol id="i-call" viewBox="0 0 24 24"><path d="M7 3 4 5c0 8 7 15 15 15l2-3-5-3-2 2c-3-1-5-3-6-6l2-2-3-5Z"/></symbol>
@@ -130,7 +130,7 @@
 
   <dialog id="account-dialog" class="modal account-modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="account-dialog"><svg><use href="#i-close"/></svg></button><div id="profile-avatar" class="profile-avatar">M</div><h2 id="profile-name">Mowell user</h2><p id="profile-username" class="muted">@username</p><button id="show-web-qr-account" type="button" class="secondary wide">Show Mowell Web QR</button><button id="logout-button" type="button" class="danger wide"><svg><use href="#i-logout"/></svg>Sign out of Mowell Web</button></form></dialog>
 
-  <dialog id="web-qr-dialog" class="modal qr-modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="web-qr-dialog"><svg><use href="#i-close"/></svg></button><span class="eyebrow">MOWELL WEB</span><h2>Open Mowell Web</h2><p class="muted">Scan this code with any camera to open the official Mowell web app.</p><div class="web-qr-frame"><img id="web-qr-image" alt="QR code for Mowell Web"></div><p class="qr-address">mowellweb.grapaxels.in</p></form></dialog>
+  <dialog id="web-qr-dialog" class="modal qr-modal"><form method="dialog"><button class="dialog-close icon-button" type="button" data-close="web-qr-dialog"><svg><use href="#i-close"/></svg></button><span class="eyebrow">LINKED DEVICES</span><h2>Link Mowell Web</h2><p id="web-qr-status" class="muted">Creating a secure one-time code…</p><div class="web-qr-frame"><img id="web-qr-image" alt="One-time QR code for Mowell Web login"></div><p class="qr-address">Code expires after two minutes</p></form></dialog>
 
   <section id="incoming-call" class="incoming-call hidden">
     <div class="incoming-card"><div id="incoming-avatar" class="call-avatar">M</div><span id="incoming-kind" class="eyebrow">INCOMING VIDEO CALL</span><h2 id="incoming-name">Mowell user</h2><p>is calling you on Mowell</p><div class="incoming-actions"><button id="decline-call" class="call-action decline"><svg><use href="#i-call"/></svg><span>Decline</span></button><button id="accept-call" class="call-action accept"><svg><use href="#i-video"/></svg><span>Accept</span></button></div></div>

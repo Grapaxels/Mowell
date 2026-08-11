@@ -116,10 +116,28 @@ function clearSession() {
   $('account-dialog').close();
 }
 
-function openWebQr() {
-  const image = $('web-qr-image');
-  if (!image.src) image.src = '/v1/web/qr?v=241-2';
+let webLinkTimer = null;
+async function openWebQr() {
+  clearTimeout(webLinkTimer);
+  $('web-qr-image').removeAttribute('src');
+  $('web-qr-status').textContent = 'Creating a secure one-time code…';
   $('web-qr-dialog').showModal();
+  try {
+    const link = await api('/v1/web-link/session', { method: 'POST' });
+    $('web-qr-image').src = absolute(link.qrUrl);
+    $('web-qr-status').textContent = 'Open Linked devices in Mowell on your phone and scan this code.';
+    const poll = async () => {
+      if (!$('web-qr-dialog').open) return;
+      try {
+        const result = await api(`/v1/web-link/session/${encodeURIComponent(link.token)}`);
+        if (result.status === 'approved' && result.token) {
+          saveSession(result.token, true); state.me = result.user; $('web-qr-dialog').close(); toast('Mowell Web linked.'); await enterWorkspace(); return;
+        }
+      } catch (error) { if (error.status === 410) { $('web-qr-status').textContent = 'This code expired. Close and open the scanner again.'; return; } }
+      webLinkTimer = setTimeout(poll, 1000);
+    };
+    poll();
+  } catch (error) { $('web-qr-status').textContent = error.message; }
 }
 
 function maskEmail(email) {
@@ -683,6 +701,7 @@ async function makePeer(id, name, shouldOffer) {
     if (pc.connectionState === 'connected') {
       clearTimeout(entry.restartTimer);
       entry.restartAttempts = 0;
+      startConnectedTimer();
       $('call-status').textContent = call.video
         ? ($('remote-videos').classList.contains('has-remote-video') ? 'Video connected' : 'Call connected — receiving video')
         : 'Call connected';
@@ -812,9 +831,9 @@ async function openCall({ room, conversation, video, initiator }) {
     $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video); $('local-video').classList.remove('rear');
     await joinCallRoom(room, conversation, video, initiator);
     if (initiator) await sendMessage(JSON.stringify({ room, video, group: Boolean(conversation.isGroup) }), 'call');
-    call.startedAt = Date.now(); updateCallTimer(); call.timer = setInterval(updateCallTimer, 1000);
+    call.startedAt = 0; clearInterval(call.timer); call.timer = null; updateCallTimer();
     pollCall(); await callSignal('join', { video });
-    $('call-status').textContent = 'Call connected — waiting for the other person';
+    $('call-status').textContent = initiator ? 'Ringing…' : 'Connecting…';
   } catch (error) {
     toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone permission to make calls.' : error.message);
     await endCall(false);
@@ -822,8 +841,17 @@ async function openCall({ room, conversation, video, initiator }) {
 }
 
 function updateCallTimer() {
+  if (!call.startedAt) { $('call-timer').textContent = '00:00'; return; }
   const seconds = Math.max(0, Math.floor((Date.now() - call.startedAt) / 1000));
   $('call-timer').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function startConnectedTimer() {
+  if (call.startedAt) return;
+  call.startedAt = Date.now();
+  updateCallTimer();
+  clearInterval(call.timer);
+  call.timer = setInterval(updateCallTimer, 1000);
 }
 
 async function endCall(notify = true) {
@@ -950,7 +978,7 @@ function startPolling() {
     while (state.token) {
       try { await loadConversations(); if (state.active) { await loadMessages({ preserve: true }); await pollTyping(); } }
       catch (error) { if (error.status === 401) { clearSession(); break; } }
-      await sleep(document.hidden ? 7000 : 2400);
+      await sleep(document.hidden ? 7000 : (state.active ? 250 : 750));
     }
     state.polling = false;
   })();

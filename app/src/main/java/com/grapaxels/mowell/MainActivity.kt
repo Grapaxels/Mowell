@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.location.LocationManager
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
@@ -396,6 +397,24 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     fun setMessageSound(uri: Uri) = NotificationPreferences.setMessageSound(getApplication(), uri.toString())
     fun setCallSound(uri: Uri) = NotificationPreferences.setCallSound(getApplication(), uri.toString())
     fun setConversationSound(conversationId: String, uri: Uri) = NotificationPreferences.setConversationSound(getApplication(), conversationId, uri.toString())
+
+    fun approveWebLink(token: String, done: (String) -> Unit) {
+        viewModelScope.launch { auth.approveWebLink(token).fold(onSuccess = done, onFailure = { done(it.message ?: "Could not link Mowell Web") }) }
+    }
+
+    fun playVoiceInline(context: Context, message: MessageEntity) {
+        val id = message.attachmentId ?: return
+        viewModelScope.launch {
+            auth.downloadAttachment(id).onSuccess { (_, bytes) ->
+                val file = File(context.cacheDir, "mowell_voice_$id.m4a")
+                file.writeBytes(bytes)
+                MediaPlayer.create(context, Uri.fromFile(file))?.apply {
+                    setOnCompletionListener { player -> player.release() }
+                    start()
+                }
+            }.onFailure { _authError.value = it.message ?: "Voice message could not play" }
+        }
+    }
 
     private fun preview(message: MessageEntity): String = when (message.kind) {
         "image" -> "Photo"

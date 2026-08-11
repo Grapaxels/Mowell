@@ -142,6 +142,9 @@ import com.grapaxels.mowell.data.MessageEntity
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -322,8 +325,10 @@ private fun MainExperience(vm: MowellViewModel) {
     var page by remember { mutableStateOf(Page.CHATS) }
     var openChat by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf<ConversationEntity?>(null) }
+    var linkedDevices by remember { mutableStateOf(false) }
     BackHandler {
         when {
+            linkedDevices -> linkedDevices = false
             profile != null -> profile = null
             openChat != null -> openChat = null
             page != Page.CHATS -> page = Page.CHATS
@@ -340,11 +345,12 @@ private fun MainExperience(vm: MowellViewModel) {
         )
     }
     when {
+        linkedDevices -> LinkedDevicesScreen(vm) { linkedDevices = false }
         profile != null -> ProfileScreen(vm, profile!!, { profile = null })
         openChat != null -> ChatScreen(vm, openChat!!, { openChat = null }, { vm.launchCall(context, it) }, { conversation -> profile = conversation })
         else -> Scaffold(
             containerColor = Canvas,
-            topBar = { ClayHeader(vm, onChats = { page = Page.CHATS }, onProfile = { page = Page.YOU }, onSettings = { page = Page.YOU }, onLinkedDevices = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mowellweb.grapaxels.in"))) }) },
+            topBar = { ClayHeader(vm, onChats = { page = Page.CHATS }, onProfile = { page = Page.YOU }, onSettings = { page = Page.YOU }, onLinkedDevices = { linkedDevices = true }) },
             bottomBar = {
                 NavigationBar(
                     containerColor = ClayWhite,
@@ -369,6 +375,38 @@ private fun MainExperience(vm: MowellViewModel) {
                 Page.NEARBY -> NearbyScreen(vm, Modifier.padding(padding))
                 Page.YOU -> SettingsScreen(vm, Modifier.padding(padding))
             }
+        }
+    }
+}
+
+@Composable
+private fun LinkedDevicesScreen(vm: MowellViewModel, back: () -> Unit) {
+    val context = LocalContext.current
+    var status by remember { mutableStateOf("Scan the QR displayed on the Mowell Web login page.") }
+    var busy by remember { mutableStateOf(false) }
+    val scanner = remember(context) {
+        val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        GmsBarcodeScanning.getClient(context, options)
+    }
+    val scan = {
+        busy = true; status = "Opening secure scanner…"
+        scanner.startScan()
+            .addOnSuccessListener { barcode ->
+                val raw = barcode.rawValue.orEmpty()
+                val uri = runCatching { Uri.parse(raw) }.getOrNull()
+                val token = if (uri?.scheme == "mowell" && uri.host == "link-device") uri.getQueryParameter("token") else null
+                if (token.isNullOrBlank()) { busy = false; status = "This is not a valid Mowell Web linking code." }
+                else vm.approveWebLink(token) { result -> busy = false; status = result }
+            }
+            .addOnCanceledListener { busy = false; status = "Scan cancelled." }
+            .addOnFailureListener { error -> busy = false; status = error.message ?: "Scanner could not start." }
+        Unit
+    }
+    Scaffold(containerColor = Canvas, topBar = { Row(Modifier.fillMaxWidth().background(ClayWhite).padding(horizontal = 6.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = back) { Icon(Icons.Rounded.ArrowBack, "Back") }; Text("Linked devices", fontSize = 20.sp, fontWeight = FontWeight.Black) } }) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            OrbLogo(88.dp); Spacer(Modifier.height(22.dp)); Text("Link Mowell Web", fontSize = 27.sp, fontWeight = FontWeight.Black); Spacer(Modifier.height(9.dp)); Text(status, color = Muted, textAlign = androidx.compose.ui.text.style.TextAlign.Center); Spacer(Modifier.height(24.dp))
+            Button(onClick = scan, enabled = !busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(18.dp)) { if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp) else { Icon(Icons.Rounded.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("Scan QR code") } }
+            Spacer(Modifier.height(14.dp)); Text("Codes expire after two minutes and can only be used once.", color = Muted, fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
 }
@@ -672,7 +710,7 @@ private fun ProfileScreen(vm: MowellViewModel, conversation: ConversationEntity,
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> Unit, call: (CallSession) -> Unit, profile: (ConversationEntity) -> Unit) {
     val messages by vm.messages(conversationId).collectAsStateWithLifecycle(initialValue = emptyList())
@@ -769,7 +807,7 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     )
     LaunchedEffect(conversationId) {
         vm.markConversationRead(conversationId)
-        while (true) { vm.syncConversation(conversationId); vm.refreshTyping(conversationId); delay(1_000) }
+        while (true) { vm.syncConversation(conversationId); vm.refreshTyping(conversationId); delay(250) }
     }
     DisposableEffect(conversationId) { onDispose { vm.updateTyping(conversationId, false) } }
     LaunchedEffect(displayedMessages.size, typing, chatQuery) {
@@ -874,10 +912,12 @@ private fun ChatScreen(vm: MowellViewModel, conversationId: String, back: () -> 
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState, contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             if (chatQuery.isNotBlank() && displayedMessages.isEmpty()) item(key = "no-search-results") { Text("No matching messages or files", color = Muted, modifier = Modifier.fillMaxWidth().padding(24.dp)) }
-            itemsIndexed(displayedMessages, key = { _, message -> message.id }) { index, message ->
-                if (index == 0 || dayKey(displayedMessages[index - 1].sentAt) != dayKey(message.sentAt)) DayBadge(dayLabel(message.sentAt))
-                val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
-                MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { deleteTarget = message }, openAttachment = { vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
+            displayedMessages.groupBy { dayKey(it.sentAt) }.forEach { (day, dayMessages) ->
+                stickyHeader(key = "day-$day") { DayBadge(dayLabel(dayMessages.first().sentAt)) }
+                items(dayMessages, key = { message -> message.id }) { message ->
+                    val callRoom = if (message.kind == "call") runCatching { JSONObject(message.body).optString("room") }.getOrNull() else null
+                    MessageClay(message, callEnded = !callRoom.isNullOrBlank() && callRoom in endedRooms, onReply = { replyTo = message }, onLongPress = { deleteTarget = message }, openAttachment = { if (message.kind == "audio") vm.playVoiceInline(context, message) else vm.openAttachment(context, message) }, openContact = { name, phone -> vm.openContact(context, name, phone) }, joinCall = { room, video, group -> call(CallSession(conversationId, conversation?.title ?: message.sender, room, video, group, avatarUrl = conversation?.avatarUrl)) })
+                }
             }
             if (chatQuery.isBlank() && typing.isNotEmpty()) item(key = "typing-indicator") { TypingBubble(typing.joinToString(", ")) }
         }

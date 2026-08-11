@@ -11,7 +11,7 @@ import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { fileURLToPath } from "node:url";
-import { CallRoom, CallSignal, ConnectionRequest, Conversation, Media, Message, TypingState, User } from "./models/index.js";
+import { CallRoom, CallSignal, ConnectionRequest, Conversation, DeviceLink, Media, Message, TypingState, User } from "./models/index.js";
 
 const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
 if (!mongoUri) throw new Error("MONGODB_URI (or MONGO_URI) is required");
@@ -47,7 +47,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.5.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.4.6.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -210,6 +210,38 @@ app.get("/v1/web/qr", async (_req, res, next) => {
     res.type("image/svg+xml").send(svg);
   } catch (error) { next(error); }
 });
+
+const linkTokenHash = (token) => crypto.createHash("sha256").update(String(token || "")).digest("hex");
+app.post("/v1/web-link/session", async (_req, res) => {
+  const token = crypto.randomBytes(32).toString("base64url");
+  await DeviceLink.create({ tokenHash: linkTokenHash(token), expiresAt: new Date(Date.now() + 2 * 60 * 1000) });
+  res.status(201).json({ token, qrUrl: `/v1/web-link/qr?token=${encodeURIComponent(token)}`, expiresIn: 120 });
+});
+app.get("/v1/web-link/qr", async (req, res, next) => {
+  try {
+    const token = String(req.query.token || "");
+    const link = await DeviceLink.findOne({ tokenHash: linkTokenHash(token), expiresAt: { $gt: new Date() } });
+    if (!link) return res.status(410).json({ error: "This linking code expired" });
+    const png = await QRCode.toBuffer(`mowell://link-device?token=${encodeURIComponent(token)}`, { type: "png", width: 360, margin: 2, errorCorrectionLevel: "M" });
+    res.type("png").set("Cache-Control", "no-store").send(png);
+  } catch (error) { next(error); }
+});
+app.get("/v1/web-link/session/:token", async (req, res) => {
+  const tokenHash = linkTokenHash(req.params.token);
+  const link = await DeviceLink.findOne({ tokenHash, expiresAt: { $gt: new Date() } }).populate("user");
+  if (!link) return res.status(410).json({ error: "This linking code expired" });
+  if (link.status !== "approved" || !link.user) return res.json({ status: "pending" });
+  const user = link.user;
+  await DeviceLink.deleteOne({ _id: link._id });
+  res.json({ status: "approved", token: issueToken(user), user: publicUser(user) });
+});
+app.post("/v1/web-link/approve", auth, async (req, res) => {
+  const token = String(req.body.token || "");
+  const link = await DeviceLink.findOne({ tokenHash: linkTokenHash(token), status: "pending", expiresAt: { $gt: new Date() } });
+  if (!link) return res.status(410).json({ error: "This linking code is invalid or expired" });
+  link.user = req.auth.sub; link.status = "approved"; link.approvedAt = new Date(); await link.save();
+  res.json({ ok: true, message: "Mowell Web linked" });
+});
 app.get("/health/email", (_req, res) => {
   const smtp = smtpSettings();
   res.json({
@@ -222,10 +254,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => res.json({
-  versionCode: 45,
-  versionName: "2.4.5",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.5.apk",
-  sha256: "E3736CCC0BBB4AD8E678899919BBD7289BEFCFE9CE95F54B1208840B5A58824B",
+  versionCode: 46,
+  versionName: "2.4.6",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.6.apk",
+    sha256: "CDC1D692D69EB3F3CDAFC7F1ED32D81622D0B3A13A5BE122B2767A306BF816F9",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 
@@ -688,8 +720,15 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
     const target = req.body.target ? String(req.body.target) : null;
     if (target && !call.participants.some((id) => id.toString() === target)) return res.sendStatus(403);
     const signal = await CallSignal.create({ room, sender: req.auth.sub, target, type, payload: req.body.payload || {} });
-    if (type === "leave" && (call.participants.length <= 2 || req.body.payload?.reason === "no_answer")) {
-      await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
+    if (type === "leave") {
+      if (call.participants.length <= 2) {
+        await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
+      } else {
+        // A member declining or leaving a group call must not terminate the
+        // room for everyone else. Remove only that identity from this room.
+        call.participants = call.participants.filter((id) => id.toString() !== req.auth.sub);
+        await call.save();
+      }
     }
     res.status(201).json({ id: signal._id.toString() });
   } catch { res.status(400).json({ error: "Could not send call signal" }); }

@@ -179,6 +179,19 @@ class AuthRepository(context: Context) {
         }
     }
 
+    suspend fun approveWebLink(token: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val session = savedSession ?: error("Sign in before linking Mowell Web")
+            val body = JSONObject().put("token", token)
+            client.newCall(Request.Builder().url("$serverUrl/v1/web-link/approve").header("Authorization", "Bearer ${session.token}")
+                .post(body.toString().toRequestBody(jsonType)).build()).execute().use { response ->
+                val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+                if (!response.isSuccessful) error(json.optString("error", "Could not link Mowell Web"))
+                json.optString("message", "Mowell Web linked")
+            }
+        }
+    }
+
     suspend fun requestConnection(userId: String): Result<ConnectionStartResult> = withContext(Dispatchers.IO) {
         runCatching {
             val body = JSONObject().put("userId", userId)
