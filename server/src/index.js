@@ -52,7 +52,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.4.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.5.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -282,10 +282,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.json({
-  versionCode: 54,
-  versionName: "2.5.4",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.4.apk",
-    sha256: "9DE677CBFAB99D82F6A4C0070E59A184205BB30D35D54B957C34B58DDCE9B825",
+  versionCode: 55,
+  versionName: "2.5.5",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.5.apk",
+    sha256: "4CF62E5C5C10E887BD4390E128A745A26FFC738AA68AB146AB572F2577ABE6B1",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }); });
 
@@ -693,7 +693,12 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
       if (!req.body.initiator) return res.status(404).json({ error: "Call is no longer available" });
       const conversation = await Conversation.findOne({ _id: req.body.conversationId, members: req.auth.sub });
       if (!conversation) return res.sendStatus(404);
-      const busy = await CallRoom.exists({ status: "active", participants: { $in: conversation.members }, expiresAt: { $gt: new Date() } });
+      const liveCutoff = new Date(Date.now() - 35000);
+      await CallRoom.updateMany(
+        { status: "active", participants: { $in: conversation.members }, updatedAt: { $lte: liveCutoff } },
+        { $set: { status: "ended", endedAt: new Date() } }
+      );
+      const busy = await CallRoom.exists({ status: "active", participants: { $in: conversation.members }, updatedAt: { $gt: liveCutoff }, expiresAt: { $gt: new Date() } });
       if (busy) {
         await Message.findOneAndUpdate(
           { conversation: conversation._id, clientId: `call-end-${room}` },
@@ -781,13 +786,27 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
     if (target && !call.participants.some((id) => id.toString() === target)) return res.sendStatus(403);
     const signal = await CallSignal.create({ room, sender: req.auth.sub, target, type, payload: req.body.payload || {} });
     if (type === "leave") {
-      if (!call.group && call.participants.length <= 2) {
+      if (!call.group) {
         await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
+        await CallSignal.deleteMany({ room });
+        await CallRoom.deleteOne({ _id: call._id });
       } else {
         // A member declining or leaving a group call must not terminate the
         // room for everyone else. Remove only that identity from this room.
         call.participants = call.participants.filter((id) => id.toString() !== req.auth.sub);
-        await call.save();
+        const heartbeats = { ...(call.participantHeartbeats || {}) };
+        delete heartbeats[req.auth.sub];
+        call.participantHeartbeats = heartbeats;
+        const activeCutoff = Date.now() - 30000;
+        const hasActiveMember = call.participants.some((id) => Number(heartbeats[id.toString()] || 0) >= activeCutoff);
+        if (hasActiveMember) {
+          call.markModified("participantHeartbeats");
+          await call.save();
+        } else {
+          await endCall(call, req.body.payload?.reason || "empty", req.auth.sub);
+          await CallSignal.deleteMany({ room });
+          await CallRoom.deleteOne({ _id: call._id });
+        }
       }
     }
     res.status(201).json({ id: signal._id.toString() });

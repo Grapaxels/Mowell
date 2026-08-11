@@ -151,6 +151,13 @@ class MowellCallActivity : ComponentActivity() {
         }
     }
 
+    override fun onStop() {
+        if (isFinishing && ::webView.isInitialized) {
+            webView.evaluateJavascript("window.mowellHangup && window.mowellHangup()", null)
+        }
+        super.onStop()
+    }
+
     override fun onDestroy() {
         if (current.get() === this) current.clear()
         if (::webView.isInitialized) {
