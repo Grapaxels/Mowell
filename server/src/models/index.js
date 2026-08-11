@@ -41,6 +41,7 @@ const messageSchema = new mongoose.Schema({
   body: { type: String, required: true, maxlength: 8000 },
   kind: { type: String, enum: ["text", "image", "audio", "video", "file", "location", "contact", "sticker", "call", "call_end", "system"], default: "text" },
   attachment: { type: mongoose.Schema.Types.ObjectId, ref: "Media" },
+  readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   sentAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 messageSchema.index({ conversation: 1, clientId: 1 }, { unique: true });

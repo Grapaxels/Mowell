@@ -251,7 +251,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         if (conversationId.startsWith("user:") || !syncing.add(conversationId)) return
         viewModelScope.launch {
             try {
-                syncConversationInternal(conversationId, conversations.value.find { it.id == conversationId }?.title ?: "Mowell", false)
+                syncConversationInternal(conversationId, conversations.value.find { it.id == conversationId }?.title ?: "Mowell", false, true)
             } finally { syncing.remove(conversationId) }
         }
     }
@@ -264,21 +264,21 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             remoteConversations.forEach { remote ->
                 val existing = conversations.value.find { it.id == remote.id }
                 dao.upsertConversation(ConversationEntity(remote.id, remote.title, existing?.subtitle ?: "Start chatting", remote.isGroup, remote.updatedAt, remote.username, remote.avatarUrl, remote.lastSeenAt, remote.members, existing?.unreadCount ?: 0))
-                syncConversationInternal(remote.id, remote.title, notify)
+                syncConversationInternal(remote.id, remote.title, notify, false)
             }
             initialSyncComplete = true
         } finally { syncingAll.set(false) }
     }
 
-    private suspend fun syncConversationInternal(conversationId: String, title: String, notify: Boolean) {
-        val after = syncCursors[conversationId] ?: 0L
-        auth.fetchMessages(conversationId, after).onSuccess { remote ->
+    private suspend fun syncConversationInternal(conversationId: String, title: String, notify: Boolean, markRead: Boolean) {
+        val after = if (markRead) 0L else (syncCursors[conversationId] ?: 0L)
+        auth.fetchMessages(conversationId, after, markRead).onSuccess { remote ->
             remote.forEach { item ->
                 if (hiddenMessages.getStringSet(item.conversationId, emptySet()).orEmpty().contains(item.id)) return@forEach
                 val isNew = !dao.hasMessage(item.id)
                 val message = MessageEntity(
                     item.id, item.conversationId, if (item.outgoing) "You" else item.sender,
-                    item.body, item.sentAt, item.outgoing, Route.INTERNET.name, "sent", item.kind,
+                    item.body, item.sentAt, item.outgoing, Route.INTERNET.name, item.delivery, item.kind,
                     item.attachmentId, item.attachmentMime, item.attachmentName
                 )
                 dao.insertMessage(message)
@@ -295,7 +295,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             }
             remote.maxOfOrNull { it.sentAt }?.let { syncCursors[conversationId] = maxOf(syncCursors[conversationId] ?: 0L, it) }
             remote.lastOrNull()?.let { last ->
-                val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, "sent", last.kind, last.attachmentId, last.attachmentMime, last.attachmentName)
+                val message = MessageEntity(last.id, last.conversationId, last.sender, last.body, last.sentAt, last.outgoing, Route.INTERNET.name, last.delivery, last.kind, last.attachmentId, last.attachmentMime, last.attachmentName)
                 val current = conversations.value.find { it.id == conversationId }
                 dao.upsertConversation(current?.copy(subtitle = preview(message), updatedAt = last.sentAt) ?: ConversationEntity(conversationId, title, preview(message), false, last.sentAt))
             }

@@ -349,7 +349,7 @@ async function openConversation(conversation) {
 async function loadMessages({ preserve = false } = {}) {
   if (!state.active) return;
   try {
-    const data = await api(`/v1/conversations/${conversationId(state.active)}/messages`);
+    const data = await api(`/v1/conversations/${conversationId(state.active)}/messages?markRead=true`);
     const before = state.messages.at(-1)?._id;
     state.messages = data.messages || [];
     state.active._lastMessage = state.messages.at(-1);

@@ -32,7 +32,7 @@ data class RemoteMessage(
     val id: String, val conversationId: String, val sender: String, val body: String,
     val sentAt: Long, val outgoing: Boolean, val kind: String = "text",
     val attachmentId: String? = null, val attachmentMime: String? = null,
-    val attachmentName: String? = null
+    val attachmentName: String? = null, val delivery: String = "sent"
 )
 
 class AuthRepository(context: Context) {
@@ -256,10 +256,11 @@ class AuthRepository(context: Context) {
         }
     }
 
-    suspend fun fetchMessages(conversationId: String, afterMillis: Long): Result<List<RemoteMessage>> = withContext(Dispatchers.IO) {
+    suspend fun fetchMessages(conversationId: String, afterMillis: Long, markRead: Boolean = false): Result<List<RemoteMessage>> = withContext(Dispatchers.IO) {
         runCatching {
             val session = savedSession ?: error("Not signed in")
-            val suffix = if (afterMillis > 0) "?after=" + java.net.URLEncoder.encode(isoDate(afterMillis), "UTF-8") else ""
+            val params = buildList { if (afterMillis > 0) add("after=" + java.net.URLEncoder.encode(isoDate(afterMillis), "UTF-8")); if (markRead) add("markRead=true") }
+            val suffix = if (params.isEmpty()) "" else "?" + params.joinToString("&")
             val response = client.newCall(Request.Builder().url("$serverUrl/v1/conversations/$conversationId/messages$suffix")
                 .header("Authorization", "Bearer ${session.token}").build()).execute()
             val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
@@ -348,7 +349,8 @@ class AuthRepository(context: Context) {
             senderObject?.let { it.optString("displayName", it.optString("username", "Mowell user")) } ?: "Mowell user",
             item.optString("body"), parseDate(item.optString("sentAt")), senderId == session.user.id,
             item.optString("kind", "text"), attachment?.optString("_id"),
-            attachment?.optString("mimeType"), attachment?.optString("fileName")
+            attachment?.optString("mimeType"), attachment?.optString("fileName"),
+            if (item.optJSONArray("readBy")?.let { array -> (0 until array.length()).any { index -> array.optString(index) != session.user.id } } == true) "seen" else "sent"
         )
     }
 

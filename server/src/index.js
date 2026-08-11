@@ -225,7 +225,7 @@ app.get("/v1/app/version", (_req, res) => res.json({
   versionCode: 45,
   versionName: "2.4.5",
   apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.4.5.apk",
-  sha256: "A0912B52431F9DB900ACDA8FF47BD06B477F5700687495AE8A175477048F652B",
+  sha256: "E3736CCC0BBB4AD8E678899919BBD7289BEFCFE9CE95F54B1208840B5A58824B",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }));
 
@@ -496,6 +496,7 @@ app.post("/v1/conversations", auth, async (req, res) => {
 app.get("/v1/conversations/:id/messages", auth, async (req, res) => {
   const allowed = await Conversation.exists({ _id: req.params.id, members: req.auth.sub });
   if (!allowed) return res.sendStatus(404);
+  if (String(req.query.markRead).toLowerCase() === "true") await Message.updateMany({ conversation: req.params.id, sender: { $ne: req.auth.sub }, readBy: { $ne: req.auth.sub } }, { $addToSet: { readBy: req.auth.sub } });
   const filter = { conversation: req.params.id };
   if (req.query.after) filter.sentAt = { $gt: new Date(String(req.query.after)) };
   else filter.sentAt = { $lt: req.query.before ? new Date(String(req.query.before)) : new Date() };
