@@ -20,6 +20,8 @@ data class UserProfile(
 
 data class AuthSession(val token: String, val user: UserProfile)
 data class AuthResult(val session: AuthSession? = null, val error: String? = null, val verificationEmail: String? = null)
+data class IncomingConnectionRequest(val id: String, val user: UserProfile, val createdAt: Long)
+data class ConnectionStartResult(val connected: Boolean, val conversationId: String? = null, val message: String = "Connection request sent")
 data class RemoteConversation(
     val id: String, val title: String, val isGroup: Boolean, val updatedAt: Long,
     val username: String? = null, val avatarUrl: String? = null,
@@ -172,6 +174,44 @@ class AuthRepository(context: Context) {
             val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
             if (!response.isSuccessful) error(json.optString("error", "Could not start conversation"))
             json.getJSONObject("conversation").getString("_id")
+        }
+    }
+
+    suspend fun requestConnection(userId: String): Result<ConnectionStartResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("userId", userId)
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/connections/requests")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not send connection request"))
+            ConnectionStartResult(json.optBoolean("connected"), json.optString("conversationId").takeIf { it.isNotBlank() }, json.optString("message", "Connection request sent"))
+        }
+    }
+
+    suspend fun fetchConnectionRequests(): Result<List<IncomingConnectionRequest>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/connections/requests")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not load connection requests"))
+            val array = json.optJSONArray("requests") ?: return@runCatching emptyList()
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    add(IncomingConnectionRequest(item.getString("id"), parseUser(item.getJSONObject("user")), parseDate(item.optString("createdAt"))))
+                }
+            }
+        }
+    }
+
+    suspend fun respondToConnectionRequest(requestId: String, accept: Boolean): Result<String?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("action", if (accept) "accept" else "decline")
+            val response = client.newCall(Request.Builder().url("$serverUrl/v1/connections/requests/$requestId/respond")
+                .header("Authorization", "Bearer ${savedSession?.token.orEmpty()}").post(body.toString().toRequestBody(jsonType)).build()).execute()
+            val json = JSONObject(response.body?.string().orEmpty().ifBlank { "{}" })
+            if (!response.isSuccessful) error(json.optString("error", "Could not respond to request"))
+            json.optString("conversationId").takeIf { it.isNotBlank() }
         }
     }
 

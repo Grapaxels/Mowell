@@ -27,6 +27,7 @@ import androidx.lifecycle.viewModelScope
 import com.grapaxels.mowell.auth.AuthRepository
 import com.grapaxels.mowell.auth.AuthResult
 import com.grapaxels.mowell.auth.AuthSession
+import com.grapaxels.mowell.auth.IncomingConnectionRequest
 import com.grapaxels.mowell.auth.UserProfile
 import com.grapaxels.mowell.call.CallCoordinator
 import com.grapaxels.mowell.data.CachedUser
@@ -122,6 +123,9 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     val passwordResetStatus: StateFlow<String?> = _passwordResetStatus.asStateFlow()
     private val _userResults = MutableStateFlow<List<UserProfile>>(emptyList())
     val userResults: StateFlow<List<UserProfile>> = _userResults.asStateFlow()
+    private val _connectionRequests = MutableStateFlow<List<IncomingConnectionRequest>>(emptyList())
+    val connectionRequests: StateFlow<List<IncomingConnectionRequest>> = _connectionRequests.asStateFlow()
+    private val notifiedConnectionRequests = ConcurrentHashMap.newKeySet<String>()
     private val _update = MutableStateFlow<UpdateInfo?>(null)
     val update: StateFlow<UpdateInfo?> = _update.asStateFlow()
     private val _showUpdatePopup = MutableStateFlow(false)
@@ -165,7 +169,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             while (isActive) {
-                if (_session.value != null) syncAllConversations()
+                if (_session.value != null) { syncAllConversations(); refreshConnectionRequests() }
                 delay(1_000)
             }
         }
@@ -474,13 +478,38 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startChat(user: UserProfile, onReady: (String) -> Unit) {
         viewModelScope.launch {
-            val conversationId = auth.createConversation(user.id).getOrElse { "user:${user.id}" }
-            dao.upsertConversation(ConversationEntity(conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis(), user.username, user.avatarUrl))
-            onReady(conversationId)
+            auth.requestConnection(user.id).onSuccess { result ->
+                if (result.connected && !result.conversationId.isNullOrBlank()) {
+                    dao.upsertConversation(ConversationEntity(result.conversationId, user.displayName, "@${user.username}", false, System.currentTimeMillis(), user.username, user.avatarUrl))
+                    onReady(result.conversationId)
+                } else _authError.value = result.message
+            }.onFailure { _authError.value = it.message }
         }
     }
 
-    fun logout() { auth.logout(); _session.value = null; _userResults.value = emptyList() }
+    private fun refreshConnectionRequests() {
+        viewModelScope.launch {
+            auth.fetchConnectionRequests().onSuccess { requests ->
+                requests.filter { notifiedConnectionRequests.add(it.id) }.forEach { notifier.showConnectionRequest(it.user.displayName) }
+                _connectionRequests.value = requests
+            }
+        }
+    }
+
+    fun respondToConnectionRequest(request: IncomingConnectionRequest, accept: Boolean, onReady: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            auth.respondToConnectionRequest(request.id, accept).onSuccess { conversationId ->
+                _connectionRequests.value = _connectionRequests.value.filterNot { it.id == request.id }
+                if (accept && !conversationId.isNullOrBlank()) {
+                    dao.upsertConversation(ConversationEntity(conversationId, request.user.displayName, "@${request.user.username}", false, System.currentTimeMillis(), request.user.username, request.user.avatarUrl))
+                    syncAllConversations()
+                    onReady(conversationId)
+                }
+            }.onFailure { _authError.value = it.message }
+        }
+    }
+
+    fun logout() { auth.logout(); _session.value = null; _userResults.value = emptyList(); _connectionRequests.value = emptyList(); notifiedConnectionRequests.clear() }
     fun updateDisplayName(name: String) {
         viewModelScope.launch {
             val result = auth.updateDisplayName(name)

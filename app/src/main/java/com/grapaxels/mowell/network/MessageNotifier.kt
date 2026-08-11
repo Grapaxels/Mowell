@@ -101,6 +101,28 @@ class MessageNotifier(private val context: Context) {
         notificationPrefs.edit().putStringSet(key, ids).apply()
     }
 
+    fun showConnectionRequest(displayName: String) {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val sound = NotificationPreferences.messageSound(context, "connections")
+        val channelId = "mowell_connections_${sound.hashCode()}"
+        ensureChannel(channelId, false, true, sound, "Connection requests")
+        val intent = Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP }
+        val pendingIntent = PendingIntent.getActivity(context, "connection-requests".hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_mowell)
+            .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.drawable.mowell_logo))
+            .setContentTitle("New connection request")
+            .setContentText("$displayName wants to connect with you")
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$displayName wants to connect. Open Mowell to accept or decline."))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .setSound(Uri.parse(sound))
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        NotificationManagerCompat.from(context).notify("connection:$displayName".hashCode(), notification)
+    }
+
     private fun ensureChannel(id: String, call: Boolean, floating: Boolean, sound: String, title: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val importance = if (call || floating) NotificationManager.IMPORTANCE_HIGH else NotificationManager.IMPORTANCE_DEFAULT

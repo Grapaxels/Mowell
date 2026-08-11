@@ -11,6 +11,10 @@ const userSchema = new mongoose.Schema({
   verificationExpiresAt: { type: Date, select: false },
   verificationLastSentAt: { type: Date, select: false },
   verificationAttempts: { type: Number, default: 0, select: false },
+  loginCodeHash: { type: String, select: false },
+  loginExpiresAt: { type: Date, select: false },
+  loginLastSentAt: { type: Date, select: false },
+  loginAttempts: { type: Number, default: 0, select: false },
   passwordResetCodeHash: { type: String, select: false },
   passwordResetExpiresAt: { type: Date, select: false },
   passwordResetAttempts: { type: Number, default: 0, select: false },
@@ -44,6 +48,15 @@ messageSchema.index({ conversation: 1, sentAt: -1 });
 export const User = mongoose.model("User", userSchema);
 export const Conversation = mongoose.model("Conversation", conversationSchema);
 export const Message = mongoose.model("Message", messageSchema);
+
+const connectionRequestSchema = new mongoose.Schema({
+  requester: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  status: { type: String, enum: ["pending", "accepted", "declined"], default: "pending", index: true },
+  respondedAt: Date
+}, { timestamps: true });
+connectionRequestSchema.index({ requester: 1, recipient: 1 }, { unique: true });
+export const ConnectionRequest = mongoose.model("ConnectionRequest", connectionRequestSchema);
 
 const typingStateSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true, index: true },
