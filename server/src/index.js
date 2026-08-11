@@ -52,7 +52,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.2.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.3.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -282,10 +282,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.json({
-  versionCode: 52,
-  versionName: "2.5.2",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.2.apk",
-    sha256: "F72DCC33D8EFE0ED5918C2ACC8DD87239E3A5BBE9AE8BF51263DEDB7A126D816",
+  versionCode: 53,
+  versionName: "2.5.3",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.3.apk",
+    sha256: "1FA77A2D89D3F214F4FC6377B5895BA8167FBC09E1E7113A2EDF25867652DC64",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }); });
 
@@ -702,7 +702,7 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
         );
         return res.status(409).json({ error: "User is in another call", code: "USER_BUSY" });
       }
-      call = await CallRoom.create({ room, conversation: conversation._id, participants: conversation.members, createdBy: req.auth.sub, video: Boolean(req.body.video) });
+      call = await CallRoom.create({ room, conversation: conversation._id, participants: conversation.members, createdBy: req.auth.sub, video: Boolean(req.body.video), group: Boolean(conversation.isGroup) });
     }
     if (!call.participants.some((id) => id.toString() === req.auth.sub)) return res.sendStatus(403);
     if (call.status === "ended") return res.status(410).json({ error: "Call has ended" });
@@ -713,7 +713,10 @@ app.post("/v1/calls/:room/join", auth, async (req, res) => {
     if (call.status === "ringing" && call.createdBy.toString() !== req.auth.sub) {
       call.status = "active"; call.answeredAt = new Date(); await call.save();
     }
-    res.json({ ok: true, video: call.video, group: call.participants.length > 2, status: call.status });
+    call.participantHeartbeats = { ...(call.participantHeartbeats || {}), [req.auth.sub]: Date.now() };
+    call.markModified("participantHeartbeats");
+    await call.save();
+    res.json({ ok: true, video: call.video, group: Boolean(call.group || call.participants.length > 2), status: call.status });
   } catch { res.status(400).json({ error: "Could not join call" }); }
 });
 
@@ -730,6 +733,7 @@ app.post("/v1/calls/:room/invite", auth, async (req, res) => {
     if (!call.participants.some((id) => id.toString() === invited._id.toString())) {
       call.participants.push(invited._id); await call.save();
     }
+    if (!call.group) { call.group = true; await call.save(); }
     const members = [req.auth.sub, invited._id];
     let conversation = await Conversation.findOne({ isGroup: false, members: { $all: members, $size: 2 } });
     if (!conversation) conversation = await Conversation.create({ isGroup: false, members, createdBy: req.auth.sub });
@@ -746,18 +750,24 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
     const room = String(req.params.room || "").trim();
     const type = String(req.body.type || "");
     if (!validRoom(room)) return res.status(400).json({ error: "Invalid call room" });
-    if (!["join", "offer", "answer", "ice", "leave", "media"].includes(type)) return res.status(400).json({ error: "Invalid call signal" });
+    if (!["join", "offer", "answer", "ice", "leave", "media", "heartbeat"].includes(type)) return res.status(400).json({ error: "Invalid call signal" });
     const call = await CallRoom.findOne({ room, participants: req.auth.sub });
     if (!call) return res.sendStatus(404);
     if (type === "media" && req.body.payload?.video && !call.video) {
       call.video = true;
       await call.save();
     }
+    if (type === "heartbeat") {
+      call.participantHeartbeats = { ...(call.participantHeartbeats || {}), [req.auth.sub]: Date.now() };
+      call.markModified("participantHeartbeats");
+      await call.save();
+      return res.status(204).end();
+    }
     const target = req.body.target ? String(req.body.target) : null;
     if (target && !call.participants.some((id) => id.toString() === target)) return res.sendStatus(403);
     const signal = await CallSignal.create({ room, sender: req.auth.sub, target, type, payload: req.body.payload || {} });
     if (type === "leave") {
-      if (call.participants.length <= 2) {
+      if (!call.group && call.participants.length <= 2) {
         await endCall(call, req.body.payload?.reason || "ended", req.auth.sub);
       } else {
         // A member declining or leaving a group call must not terminate the
