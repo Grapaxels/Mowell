@@ -779,7 +779,7 @@ async function pollCall() {
     } catch (error) {
       if ([404, 410].includes(error.status)) { endCall(false); return; }
     }
-    await sleep(180);
+    await sleep(100);
   }
 }
 
