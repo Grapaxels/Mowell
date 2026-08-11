@@ -6,6 +6,7 @@ const state = {
   token: localStorage.getItem('mowell_web_token') || sessionStorage.getItem('mowell_web_token'),
   me: null,
   conversations: [],
+  connectionRequests: [],
   active: null,
   messages: [],
   view: 'chats',
@@ -240,7 +241,8 @@ async function enterWorkspace() {
 }
 
 async function loadConversations() {
-  const data = await api('/v1/conversations');
+  const [data, requestData] = await Promise.all([api('/v1/conversations'), api('/v1/connections/requests').catch(() => ({ requests: [] }))]);
+  state.connectionRequests = requestData.requests || [];
   const incoming = data.conversations || [];
   const changed = [];
   for (const conversation of incoming) {
@@ -302,8 +304,29 @@ async function renderList() {
   if (state.view === 'chats' && state.filter === 'direct') list = list.filter((item) => !item.isGroup);
   if (state.view === 'chats' && state.filter === 'groups') list = list.filter((item) => item.isGroup);
   if (query) list = list.filter((item) => displayTitle(item).toLowerCase().includes(query));
-  $('list').innerHTML = list.length ? list.map(conversationRow).join('') : `<div class="list-empty"><div><svg><use href="#i-${state.view === 'groups' ? 'group' : state.view === 'calls' ? 'call' : 'chat'}"/></svg><p>No ${escapeHtml(state.view)} found.</p></div></div>`;
+  const requests = state.view === 'chats' && !query ? state.connectionRequests.map(connectionRequestMarkup).join('') : '';
+  const conversations = list.length ? list.map(conversationRow).join('') : `<div class="list-empty"><div><svg><use href="#i-${state.view === 'groups' ? 'group' : state.view === 'calls' ? 'call' : 'chat'}"/></svg><p>No ${escapeHtml(state.view)} found.</p></div></div>`;
+  $('list').innerHTML = requests + conversations;
   document.querySelectorAll('[data-conversation]').forEach((button) => button.onclick = () => openConversation(state.conversations.find((item) => conversationId(item) === button.dataset.conversation)));
+  document.querySelectorAll('[data-request-action]').forEach((button) => button.onclick = () => respondConnectionRequest(button.dataset.requestId, button.dataset.requestAction));
+}
+
+function connectionRequestMarkup(request) {
+  const user = request.user || {};
+  return `<article class="connection-request"><span class="avatar">${avatarMarkup(user.displayName || user.username, user.avatarUrl)}</span><span class="row-copy"><strong>${escapeHtml(user.displayName || user.username || 'Mowell user')}</strong><span>@${escapeHtml(user.username || '')} wants to connect</span></span><span class="request-actions"><button class="secondary" data-request-id="${escapeHtml(request.id)}" data-request-action="decline">Decline</button><button class="primary" data-request-id="${escapeHtml(request.id)}" data-request-action="accept">Accept</button></span></article>`;
+}
+
+async function respondConnectionRequest(id, action) {
+  const buttons = [...document.querySelectorAll(`[data-request-id="${CSS.escape(id)}"]`)];
+  buttons.forEach((button) => setLoading(button, true));
+  try {
+    const result = await api(`/v1/connections/requests/${encodeURIComponent(id)}/respond`, { method: 'POST', body: JSON.stringify({ action }) });
+    await loadConversations();
+    if (result.accepted && result.conversationId) {
+      const conversation = state.conversations.find((item) => conversationId(item) === result.conversationId);
+      if (conversation) await openConversation(conversation);
+    } else toast('Connection request declined.');
+  } catch (error) { toast(error.message); }
 }
 
 async function renderPeople(query) {
@@ -314,7 +337,7 @@ async function renderPeople(query) {
   $('list').innerHTML = '<div class="list-empty"><div class="button-spinner"></div></div>';
   try {
     const users = (await api(`/v1/users/search?q=${encodeURIComponent(query)}`)).users || [];
-    $('list').innerHTML = users.length ? users.map((user) => `<button class="conversation-row person-open" data-user="${escapeHtml(user.id)}"><span class="avatar">${avatarMarkup(user.displayName, user.avatarUrl)}</span><span class="row-copy"><strong>${escapeHtml(user.displayName)}</strong><span>@${escapeHtml(user.username)}</span></span><span class="row-meta">Chat</span></button>`).join('') : '<div class="list-empty"><p>No username matched.</p></div>';
+    $('list').innerHTML = users.length ? users.map((user) => `<button class="conversation-row person-open" data-user="${escapeHtml(user.id)}"><span class="avatar">${avatarMarkup(user.displayName, user.avatarUrl)}</span><span class="row-copy"><strong>${escapeHtml(user.displayName)}</strong><span>@${escapeHtml(user.username)}</span></span><span class="row-meta">Connect</span></button>`).join('') : '<div class="list-empty"><p>No username matched.</p></div>';
     document.querySelectorAll('.person-open').forEach((button) => button.onclick = () => createDirect(users.find((user) => user.id === button.dataset.user)));
   } catch (error) { $('list').innerHTML = `<div class="list-empty"><p>${escapeHtml(error.message)}</p></div>`; }
 }
@@ -322,12 +345,11 @@ async function renderPeople(query) {
 async function createDirect(user) {
   if (!user) return;
   try {
-    const data = await api('/v1/conversations', { method: 'POST', body: JSON.stringify({ memberIds: [user.id] }) });
+    const data = await api('/v1/connections/requests', { method: 'POST', body: JSON.stringify({ userId: user.id }) });
+    if (!data.connected) { $('new-dialog').close(); toast(data.message || 'Connection request sent.'); return; }
     await loadConversations();
-    const id = conversationId(data.conversation);
-    const conversation = state.conversations.find((item) => conversationId(item) === id) || data.conversation;
-    $('new-dialog').close();
-    await openConversation(conversation);
+    const conversation = state.conversations.find((item) => conversationId(item) === data.conversationId);
+    $('new-dialog').close(); if (conversation) await openConversation(conversation);
   } catch (error) { toast(error.message); }
 }
 
@@ -531,7 +553,7 @@ async function searchPeopleDialog() {
   $('people-results').innerHTML = '<p class="empty-copy">Searching…</p>';
   try {
     const users = (await api(`/v1/users/search?q=${encodeURIComponent(query)}`)).users || [];
-    $('people-results').innerHTML = users.length ? users.map((user) => `<div class="person-row"><span class="avatar">${avatarMarkup(user.displayName, user.avatarUrl)}</span><div><strong>${escapeHtml(user.displayName)}</strong><small>@${escapeHtml(user.username)}</small></div><button class="secondary dialog-chat" data-user="${escapeHtml(user.id)}">Chat</button></div>`).join('') : '<p class="empty-copy">No user found.</p>';
+    $('people-results').innerHTML = users.length ? users.map((user) => `<div class="person-row"><span class="avatar">${avatarMarkup(user.displayName, user.avatarUrl)}</span><div><strong>${escapeHtml(user.displayName)}</strong><small>@${escapeHtml(user.username)}</small></div><button class="secondary dialog-chat" data-user="${escapeHtml(user.id)}">Connect</button></div>`).join('') : '<p class="empty-copy">No user found.</p>';
     document.querySelectorAll('.dialog-chat').forEach((button) => button.onclick = () => createDirect(users.find((user) => user.id === button.dataset.user)));
   } catch (error) { $('people-results').innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`; }
 }
