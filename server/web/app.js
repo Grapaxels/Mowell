@@ -25,7 +25,7 @@ const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
   iceServers: [{ urls: ['stun:35.154.86.33:3478'] }],
-  facingMode: 'user', screenStream: null
+  facingMode: 'user', screenStream: null, controlsTimer: null
 };
 const fallbackIceServers = [
   { urls: ['stun:35.154.86.33:3478'] },
@@ -668,6 +668,18 @@ function updateRemoteVideoLayout() {
   if (hasVideo) $('call-status').textContent = 'Video connected';
 }
 
+function revealWebCallControls() {
+  const screen = $('call-screen');
+  screen.classList.remove('controls-hidden');
+  clearTimeout(call.controlsTimer);
+  call.controlsTimer = setTimeout(() => screen.classList.add('controls-hidden'), 5000);
+}
+
+function setWebPrimary(local) {
+  $('call-screen').classList.toggle('local-primary', local);
+  revealWebCallControls();
+}
+
 async function tuneSender(sender, kind, screen = false) {
   try {
     const parameters = sender.getParameters();
@@ -860,6 +872,7 @@ async function openCall({ room, conversation, video, initiator }) {
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
   $('share-screen-call').classList.remove('active'); $('share-screen-call').querySelector('span').textContent = 'Share';
   $('incoming-call').classList.add('hidden'); $('call-screen').classList.remove('hidden');
+  $('call-screen').classList.remove('local-primary', 'controls-hidden'); revealWebCallControls();
   const title = displayTitle(conversation);
   $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
   try {
@@ -923,7 +936,7 @@ function startConnectedTimer() {
 async function endCall(notify = true, reason = 'ended') {
   if (call.closed) return;
   const room = call.room;
-  call.closed = true; clearInterval(call.timer);
+  call.closed = true; clearInterval(call.timer); clearTimeout(call.controlsTimer);
   if (notify) await callSignal('leave', { reason }).catch(() => {});
   call.screenStream?.getTracks().forEach((track) => { track.onended = null; track.stop(); }); call.screenStream = null;
   call.stream?.getTracks().forEach((track) => track.stop());
@@ -931,7 +944,7 @@ async function endCall(notify = true, reason = 'ended') {
   $('remote-videos').querySelectorAll('[data-remote-media]').forEach((media) => media.remove());
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
-  $('local-video').srcObject = null; $('call-screen').classList.add('hidden');
+  $('local-video').srcObject = null; $('call-screen').classList.add('hidden'); $('call-screen').classList.remove('local-primary', 'controls-hidden');
   if (state.incoming?.data?.room === room) state.incoming = null;
   if (state.active) loadMessages({ preserve: true }).catch(() => {});
 }
@@ -1125,6 +1138,9 @@ $('camera-call').onclick = toggleCamera;
 $('flip-call').onclick = flipCamera;
 $('add-call-member').onclick = addCallMember;
 $('share-screen-call').onclick = toggleScreenShare;
+$('call-screen').addEventListener('click', revealWebCallControls);
+$('local-video').addEventListener('click', (event) => { event.stopPropagation(); setWebPrimary(true); });
+$('remote-videos').addEventListener('click', (event) => { event.stopPropagation(); setWebPrimary(false); });
 window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
 
 boot();
