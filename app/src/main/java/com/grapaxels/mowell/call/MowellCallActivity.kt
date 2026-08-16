@@ -12,6 +12,7 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
 import android.os.Build
+import android.os.PowerManager
 import android.util.Rational
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -35,6 +36,7 @@ class MowellCallActivity : ComponentActivity() {
     private var pendingToken = ""
     private var pendingConversation = ""
     private var pageLoaded = false
+    private var proximityWakeLock: PowerManager.WakeLock? = null
 
     companion object {
         private var current = WeakReference<MowellCallActivity>(null)
@@ -48,6 +50,7 @@ class MowellCallActivity : ComponentActivity() {
                 activity.runOnUiThread { activity.webView.evaluateJavascript("window.mowellHangup && window.mowellHangup()", null) }
             }
         }
+        fun isRoomActive(room: String): Boolean = current.get()?.let { !it.isFinishing && it.room == room } == true
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -57,6 +60,12 @@ class MowellCallActivity : ComponentActivity() {
         val conversation = intent.getStringExtra("conversation").orEmpty()
         conversationId = conversation
         videoCall = intent.getBooleanExtra("video", false)
+        if (!videoCall) {
+            val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (power.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                proximityWakeLock = power.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "Mowell:VoiceCallProximity")
+            }
+        }
         val auth = AuthRepository(this).savedSession
         if (room.isBlank() || conversation.isBlank() || auth == null) {
             finish()
@@ -66,7 +75,7 @@ class MowellCallActivity : ComponentActivity() {
         intent.getIntExtra("notification_id", 0).takeIf { it != 0 }?.let {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(it)
         }
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (videoCall) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
         audio.isSpeakerphoneOn = intent.getBooleanExtra("video", false)
@@ -185,7 +194,20 @@ class MowellCallActivity : ComponentActivity() {
         super.onStop()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!videoCall && proximityWakeLock?.isHeld == false) {
+            proximityWakeLock?.acquire(6 * 60 * 60 * 1000L)
+        }
+    }
+
+    override fun onPause() {
+        if (proximityWakeLock?.isHeld == true) proximityWakeLock?.release()
+        super.onPause()
+    }
+
     override fun onDestroy() {
+        if (proximityWakeLock?.isHeld == true) proximityWakeLock?.release()
         if (current.get() === this) current.clear()
         if (::webView.isInitialized) {
             webView.evaluateJavascript("window.mowellClose && window.mowellClose()", null)

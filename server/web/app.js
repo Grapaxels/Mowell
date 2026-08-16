@@ -13,6 +13,7 @@ const state = {
   filter: 'all',
   reply: null,
   incoming: null,
+  dismissedCallRooms: new Set(),
   knownUpdates: new Map(),
   initialized: false,
   polling: false,
@@ -40,6 +41,16 @@ const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => (
 const uuid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const absolute = (url) => !url ? '' : url.startsWith('/') ? `${API}${url}` : url;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let incomingBrowserNotification = null;
+
+function requestCallNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    try {
+      const request = Notification.requestPermission();
+      request?.catch?.(() => {});
+    } catch { /* Older browsers still receive the in-page call screen. */ }
+  }
+}
 
 async function api(path, options = {}) {
   const headers = { ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(options.headers || {}) };
@@ -158,6 +169,7 @@ function maskEmail(email) {
 
 async function login(event) {
   event.preventDefault();
+  requestCallNotificationPermission();
   setError('auth-error');
   setLoading($('login-button'), true);
   try {
@@ -178,6 +190,7 @@ async function login(event) {
 
 async function register(event) {
   event.preventDefault();
+  requestCallNotificationPermission();
   setError('register-error');
   setLoading($('register-button'), true);
   const email = $('register-email').value.trim();
@@ -262,6 +275,10 @@ async function enterWorkspace() {
   state.initialized = false;
   await loadConversations();
   state.initialized = true;
+  for (const conversation of state.conversations.slice(0, 20)) {
+    await inspectLatest(conversation);
+    if (state.incoming) break;
+  }
   setView('chats');
   startPolling();
 }
@@ -295,13 +312,23 @@ async function loadConversations() {
 async function inspectLatest(conversation) {
   try {
     const data = await api(`/v1/conversations/${conversationId(conversation)}/messages`);
-    const latest = (data.messages || []).at(-1);
-    if (!latest || senderId(latest) === state.me.id || latest.kind !== 'call') return;
-    const body = JSON.parse(latest.body || '{}');
-    if (body.room && body.room !== state.incoming?.data?.room && call.closed) showIncoming(conversation, latest, body);
+    const messages = data.messages || [];
     if (state.active && conversationId(state.active) === conversationId(conversation)) {
-      state.messages = data.messages || [];
+      state.messages = messages;
       renderMessages(false);
+    }
+    const endedRooms = new Set(messages.filter((item) => item.kind === 'call_end').map((item) => parseBody(item).room).filter(Boolean));
+    const latest = [...messages].reverse().find((item) => {
+      if (item.kind !== 'call' || senderId(item) === state.me.id) return false;
+      const room = parseBody(item).room;
+      return room && !endedRooms.has(room) && !state.dismissedCallRooms.has(room);
+    });
+    if (latest && call.closed) {
+      const body = parseBody(latest);
+      if (body.room !== state.incoming?.data?.room) {
+        await api(`/v1/calls/${encodeURIComponent(body.room)}/signals`);
+        showIncoming(conversation, latest, body);
+      }
     }
   } catch { /* Polling retries on the next update. */ }
 }
@@ -449,7 +476,7 @@ function contentMarkup(message) {
     return `<a class="location-card" href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" rel="noopener"><span class="location-map"><svg><use href="#i-location"/></svg></span><b>Shared location</b></a>`;
   }
   if (message.kind === 'contact') return `<div class="file-card"><svg><use href="#i-users"/></svg><span><b>${escapeHtml(data.name || 'Contact')}</b><br>${escapeHtml(data.number || '')}</span></div>`;
-  if (message.kind === 'call') return `<p class="message-text">${data.video ? 'Video' : 'Voice'} call started</p>`;
+  if (message.kind === 'call') return `<button type="button" class="call-message" data-call-room="${escapeHtml(data.room || '')}" data-call-video="${Boolean(data.video)}" data-call-group="${Boolean(data.group)}"><b>${data.video ? 'Video' : 'Voice'} call started</b><span>Tap to open call</span></button>`;
   if (message.kind === 'call_end') return `<p class="message-text">Call ended${data.reason ? ` · ${escapeHtml(String(data.reason).replaceAll('_', ' '))}` : ''}</p>`;
   return `${message.reply ? `<div class="reply-quote"><b>${escapeHtml(message.reply.sender || 'Reply')}</b><span>${escapeHtml(message.reply.body || '')}</span></div>` : ''}<p class="message-text">${escapeHtml(message.body)}</p>`;
 }
@@ -467,8 +494,28 @@ function renderMessages(preserveScroll = false) {
     const sender = message.sender?.displayName || message.sender?.username || '';
     return `${day}<div class="message-line ${outgoing ? 'outgoing' : ''} ${system ? 'system' : ''}" data-message="${escapeHtml(message._id || message.id || '')}"><div class="bubble">${state.active?.isGroup && !outgoing && !system ? `<span class="sender-name">${escapeHtml(sender)}</span>` : ''}${contentMarkup(message)}<div class="message-meta"><span>${formatTime(message.sentAt || message.createdAt)}</span>${outgoing && !system ? '<span class="ticks">✓✓</span>' : ''}</div></div></div>`;
   }).join('') || '<div class="list-empty"><p>No messages yet. Say hello.</p></div>';
+  container.querySelectorAll('.call-message[data-call-room]').forEach((button) => {
+    button.onclick = () => openCallMessage(button);
+  });
   hydrateMedia();
   if (!preserveScroll || nearBottom) requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+}
+
+async function openCallMessage(button) {
+  const room = button.dataset.callRoom;
+  if (!room || !state.active) return;
+  if (!call.closed && call.room === room) {
+    $('incoming-call').classList.add('hidden');
+    $('call-screen').classList.remove('hidden');
+    revealWebCallControls();
+    return;
+  }
+  try {
+    await api(`/v1/calls/${encodeURIComponent(room)}/signals`);
+    showIncoming(state.active, null, { room, video: button.dataset.callVideo === 'true', group: button.dataset.callGroup === 'true' });
+  } catch (error) {
+    toast([404, 410].includes(error.status) ? 'This call has already ended.' : error.message);
+  }
 }
 
 async function hydrateMedia() {
@@ -837,6 +884,7 @@ async function pollCall() {
 
 function removePeer(id) { const peer = call.peers.get(id); clearTimeout(peer?.restartTimer); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); updateRemoteVideoLayout(); }
 function showIncoming(conversation, message, data) {
+  if (!data?.room || (!call.closed && call.room === data.room)) return;
   state.incoming = { conversation, message, data };
   const title = displayTitle(conversation);
   $('incoming-name').textContent = title;
@@ -844,10 +892,25 @@ function showIncoming(conversation, message, data) {
   $('incoming-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation));
   $('accept-call').querySelector('use').setAttribute('href', data.video ? '#i-video' : '#i-call');
   $('incoming-call').classList.remove('hidden');
+  document.title = `Incoming ${data.video ? 'video' : 'voice'} call - Mowell`;
+  if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+    try {
+      incomingBrowserNotification?.close();
+      incomingBrowserNotification = new Notification(`Incoming ${data.video ? 'video' : 'voice'} call`, {
+        body: `${title} is calling`, icon: '/mowell_logo.png', tag: `mowell-call-${data.room}`, requireInteraction: true
+      });
+      incomingBrowserNotification.onclick = () => {
+        window.focus();
+        incomingBrowserNotification?.close();
+        $('incoming-call').classList.remove('hidden');
+      };
+    } catch { /* The in-page incoming screen remains available. */ }
+  }
 }
 
 async function startCall(video) {
   if (!state.active || !call.closed) return;
+  requestCallNotificationPermission();
   const room = `Mowell-Web-${uuid().replaceAll('-', '')}`;
   await openCall({ room, conversation: state.active, video, initiator: true });
 }
@@ -867,6 +930,7 @@ async function joinCallRoom(room, conversation, video, initiator) {
 }
 
 async function openCall({ room, conversation, video, initiator }) {
+  incomingBrowserNotification?.close(); incomingBrowserNotification = null; document.title = 'Mowell Web';
   call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.screenStream = null; call.peers.clear();
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
@@ -1057,7 +1121,7 @@ function startPolling() {
     while (state.token) {
       try { await loadConversations(); if (state.active) { await loadMessages({ preserve: true }); await pollTyping(); } }
       catch (error) { if (error.status === 401) { clearSession(); break; } }
-      await sleep(document.hidden ? 7000 : (state.active ? 250 : 750));
+      await sleep(document.hidden ? 1500 : (state.active ? 250 : 750));
     }
     state.polling = false;
   })();
@@ -1128,10 +1192,10 @@ $('file-input').onchange = () => { uploadFile($('file-input').files[0]); $('file
 $('location-button').onclick = shareLocation;
 $('record-button').onclick = toggleRecording;
 $('cancel-reply').onclick = () => { state.reply = null; $('reply-bar').classList.add('hidden'); };
-$('audio-call').onclick = () => startCall(false);
-$('video-call').onclick = () => startCall(true);
-$('decline-call').onclick = async () => { if (state.incoming) { call.room = state.incoming.data.room; call.closed = false; await callSignal('leave', { reason: 'declined' }).catch(() => {}); call.closed = true; } $('incoming-call').classList.add('hidden'); state.incoming = null; };
-$('accept-call').onclick = () => { if (!state.incoming) return; const incoming = state.incoming; openCall({ room: incoming.data.room, conversation: incoming.conversation, video: Boolean(incoming.data.video), initiator: false }); };
+$('audio-call').onclick = () => { requestCallNotificationPermission(); startCall(false); };
+$('video-call').onclick = () => { requestCallNotificationPermission(); startCall(true); };
+$('decline-call').onclick = async () => { if (state.incoming) { state.dismissedCallRooms.add(state.incoming.data.room); call.room = state.incoming.data.room; call.closed = false; await callSignal('leave', { reason: 'declined' }).catch(() => {}); call.closed = true; } incomingBrowserNotification?.close(); incomingBrowserNotification = null; document.title = 'Mowell Web'; $('incoming-call').classList.add('hidden'); state.incoming = null; };
+$('accept-call').onclick = () => { if (!state.incoming) return; const incoming = state.incoming; state.incoming = null; openCall({ room: incoming.data.room, conversation: incoming.conversation, video: Boolean(incoming.data.video), initiator: false }); };
 $('hangup-call').onclick = () => endCall(true, 'cancelled');
 $('mute-call').onclick = toggleMute;
 $('camera-call').onclick = toggleCamera;
@@ -1142,5 +1206,6 @@ $('call-screen').addEventListener('click', revealWebCallControls);
 $('local-video').addEventListener('click', (event) => { event.stopPropagation(); setWebPrimary(true); });
 $('remote-videos').addEventListener('click', (event) => { event.stopPropagation(); setWebPrimary(false); });
 window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.token) loadConversations().catch(() => {}); });
 
 boot();

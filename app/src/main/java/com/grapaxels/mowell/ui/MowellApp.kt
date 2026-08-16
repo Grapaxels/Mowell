@@ -957,7 +957,15 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
     val context = LocalContext.current
     val bubbleShape = if (message.outgoing) RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp) else RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 5.dp, bottomEnd = 18.dp)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.outgoing) Arrangement.End else Arrangement.Start) {
-        Box(Modifier.widthIn(min = 88.dp, max = 310.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = { if (message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null) openAttachment() }, onLongClick = onLongPress).clip(bubbleShape).background(if (message.outgoing) Violet else SoftSurface).padding(horizontal = 12.dp, vertical = 9.dp)) {
+        Box(Modifier.widthIn(min = 88.dp, max = 310.dp).pointerInput(message.id) { var drag = 0f; detectHorizontalDragGestures(onDragStart = { drag = 0f }, onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -80f) onReply() }) }.combinedClickable(onClick = {
+            when {
+                message.kind == "call" && !callEnded -> runCatching { JSONObject(message.body) }.getOrNull()?.let { data ->
+                    data.optString("room").takeIf { it.isNotBlank() }?.let { joinCall(it, data.optBoolean("video"), data.optBoolean("group")) }
+                }
+                message.kind in setOf("image", "video", "audio", "file") && message.attachmentId != null -> openAttachment()
+                else -> Unit
+            }
+        }, onLongClick = onLongPress).clip(bubbleShape).background(if (message.outgoing) Violet else SoftSurface).padding(horizontal = 12.dp, vertical = 9.dp)) {
             Column {
                 val foreground = if (message.outgoing) Color.White else Ink
                 when (message.kind) {
@@ -1013,7 +1021,7 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                         val group = data?.optBoolean("group") ?: false
                         Text(if (video) "Video call" else "Voice call", color = foreground, fontWeight = FontWeight.Bold)
                         if (callEnded) Text("Call ended", color = if (message.outgoing) Color.White.copy(alpha = .75f) else Muted, fontSize = 12.sp)
-                        else Button(onClick = { data?.optString("room")?.takeIf { it.isNotBlank() }?.let { joinCall(it, video, group) } }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Join") }
+                        else Text("Tap to open call", color = if (message.outgoing) Lime else Violet, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                     "call_end" -> Text("Call ended", color = foreground, fontWeight = FontWeight.Bold)
                     else -> Text(message.body, color = foreground)

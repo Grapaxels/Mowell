@@ -6,7 +6,10 @@ import com.grapaxels.mowell.CallSession
 
 object CallCoordinator {
     fun launch(context: Context, session: CallSession) {
-        context.startActivity(Intent(context, MowellCallActivity::class.java).apply {
+        val active = MowellCallActivity.isRoomActive(session.room)
+        val destination = if (session.initiator || active) MowellCallActivity::class.java else IncomingCallActivity::class.java
+        context.startActivity(Intent(context, destination).apply {
+            if (active) addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             putExtra("conversation", session.conversationId)
             putExtra("name", session.name)
             putExtra("room", session.room)

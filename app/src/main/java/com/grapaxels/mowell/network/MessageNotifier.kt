@@ -14,6 +14,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
+import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 import com.grapaxels.mowell.MainActivity
 import com.grapaxels.mowell.R
@@ -26,8 +27,9 @@ class MessageNotifier(private val context: Context) {
     private val notificationPrefs = context.getSharedPreferences("mowell_notification_ids", Context.MODE_PRIVATE)
 
     fun show(conversationTitle: String, message: MessageEntity, totalUnread: Int = 1, avatarUrl: String? = null) {
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val call = message.kind == "call"
+        val canNotify = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (!canNotify && !call) return
         val floating = NotificationPreferences.floating(context)
         val sound = if (call) NotificationPreferences.callSound(context) else NotificationPreferences.messageSound(context, message.conversationId)
         val channelId = if (call) "mowell_calls_${sound.hashCode()}" else "mowell_messages_${floating}_${message.conversationId.hashCode()}_${sound.hashCode()}"
@@ -90,13 +92,16 @@ class MessageNotifier(private val context: Context) {
                     putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION, notificationId)
                 }
                 val declinePending = PendingIntent.getBroadcast(context, notificationId + 1, decline, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                builder.addAction(0, "Decline", declinePending)
-                    .addAction(0, "Accept", acceptPending)
+                val caller = Person.Builder().setName(conversationTitle).setImportant(true).build()
+                builder.setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declinePending, acceptPending))
                     .setContentIntent(incomingPending)
                     .setFullScreenIntent(incomingPending, true)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setOngoing(true)
                     .setTimeoutAfter(30_000)
+                // Open immediately when Android permits a foreground launch.
+                // The full-screen intent above remains the background/lock-screen path.
+                runCatching { context.startActivity(incoming) }
             }
         } else if (message.kind != "call_end") {
             val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
@@ -109,7 +114,7 @@ class MessageNotifier(private val context: Context) {
             val remoteInput = RemoteInput.Builder(NotificationActionReceiver.KEY_REPLY).setLabel("Reply to $conversationTitle").build()
             builder.addAction(NotificationCompat.Action.Builder(0, "Reply", replyPending).addRemoteInput(remoteInput).setAllowGeneratedReplies(true).build())
         }
-        NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+        if (canNotify) NotificationManagerCompat.from(context).notify(notificationId, builder.build())
         val key = "conversation:${message.conversationId}"
         val ids = notificationPrefs.getStringSet(key, emptySet()).orEmpty().toMutableSet().apply { add(notificationId.toString()) }
         notificationPrefs.edit().putStringSet(key, ids).apply()
