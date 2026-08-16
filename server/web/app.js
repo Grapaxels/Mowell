@@ -864,12 +864,14 @@ async function openCall({ room, conversation, video, initiator }) {
   $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
   try {
     const iceConfiguration = loadIceConfiguration();
-    call.stream = await acquireCallMedia(video);
+    const mediaPromise = acquireCallMedia(video);
+    const roomPromise = joinCallRoom(room, conversation, video, initiator);
+    const ready = await Promise.all([mediaPromise, iceConfiguration, roomPromise]);
+    call.stream = ready[0];
+    const joined = ready[2];
     const localVideoTrack = call.stream.getVideoTracks()[0];
     if (localVideoTrack) localVideoTrack.contentHint = 'motion';
-    await iceConfiguration;
     $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video); $('local-video').classList.remove('rear');
-    const joined = await joinCallRoom(room, conversation, video, initiator);
     if (initiator) await sendMessage(JSON.stringify({ room, video, group: Boolean(conversation.isGroup) }), 'call');
     call.startedAt = 0; clearInterval(call.timer); call.timer = null; updateCallTimer();
     pollCall(); await callSignal('join', { video });
