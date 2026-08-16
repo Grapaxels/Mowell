@@ -26,7 +26,7 @@ const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
   iceServers: [{ urls: ['stun:35.154.86.33:3478'] }],
-  facingMode: 'user', screenStream: null, controlsTimer: null, heartbeatTimer: null, mediaWatchdogTimer: null, mediaWatchdogBusy: false
+  facingMode: 'user', screenStream: null, controlsTimer: null, heartbeatTimer: null, mediaWatchdogTimer: null, mediaWatchdogBusy: false, group: false
 };
 const fallbackIceServers = [
   { urls: ['stun:35.154.86.33:3478'] },
@@ -698,17 +698,33 @@ function hdVideoConstraints(facingMode, exact = false) {
   };
 }
 
+function setWebGroupLayout(enabled) {
+  const container = $('remote-videos'); const local = $('local-video'); let tile = $('web-local-tile');
+  call.group = Boolean(enabled);
+  $('call-screen').classList.toggle('group-call', call.group);
+  if (call.group && !tile) {
+    tile = document.createElement('div'); tile.id = 'web-local-tile'; tile.className = 'mesh-local-tile mesh-item';
+    const name = document.createElement('span'); name.className = 'mesh-name'; name.textContent = 'You';
+    tile.append(local, name); container.prepend(tile);
+  } else if (!call.group && tile) {
+    container.insertAdjacentElement('afterend', local); tile.remove();
+  }
+  updateRemoteVideoLayout();
+}
+
 function updateRemoteVideoLayout() {
   const container = $('remote-videos');
-  const videos = [...container.querySelectorAll('video[data-remote-media]')]
-    .filter((video) => video.videoWidth > 0 && video.videoHeight > 0);
-  const hasVideo = videos.length > 0;
+  const allVideos = [...container.querySelectorAll('video[data-remote-media]')];
+  const videos = allVideos.filter((video) => video.videoWidth > 0 && video.videoHeight > 0);
+  const hasVideo = videos.length > 0; const meshCount = Math.min(6, allVideos.length + (call.group ? 1 : 0));
+  container.classList.remove('mesh-1', 'mesh-2', 'mesh-3', 'mesh-4', 'mesh-5', 'mesh-6');
+  if (meshCount) container.classList.add(`mesh-${meshCount}`);
   container.classList.toggle('has-remote-video', hasVideo);
-  container.classList.toggle('single-remote-video', videos.length === 1);
+  container.classList.toggle('single-remote-video', !call.group && videos.length === 1);
   container.querySelector('.call-waiting')?.classList.toggle('hidden', hasVideo);
-  container.style.display = videos.length === 1 ? 'block' : 'grid';
+  container.style.display = !call.group && videos.length === 1 ? 'block' : 'grid';
   container.querySelectorAll('video[data-remote-media]').forEach((video) => {
-    const single = videos.length === 1 && videos[0] === video;
+    const single = !call.group && videos.length === 1 && videos[0] === video;
     video.style.position = single ? 'absolute' : '';
     video.style.inset = single ? '0' : '';
   });
@@ -822,7 +838,7 @@ async function makePeer(id, name, shouldOffer) {
     }
     if (!media) {
       media = document.createElement(event.track.kind === 'video' || call.video ? 'video' : 'audio');
-      media.id = `remote-${id}`; media.dataset.remoteMedia = 'true'; media.autoplay = true; media.playsInline = true;
+      media.id = `remote-${id}`; media.dataset.remoteMedia = 'true'; media.classList.add('mesh-item'); media.autoplay = true; media.playsInline = true;
       if (media instanceof HTMLVideoElement) {
         media.addEventListener('loadeddata', updateRemoteVideoLayout);
         media.addEventListener('playing', updateRemoteVideoLayout);
@@ -940,7 +956,7 @@ async function receiveSignal(signal) {
     if (!call.conversation?.isGroup) endCall(false);
   } else if (signal.type === 'media') {
     if (signal.payload?.requestVideo) await refreshWebOutboundVideo(signal.senderId);
-    else call.video = Boolean(signal.payload?.video);
+    else { call.video = Boolean(signal.payload?.video); if (call.video && call.group) setWebGroupLayout(true); }
   }
 }
 
@@ -1010,6 +1026,7 @@ async function joinCallRoom(room, conversation, video, initiator) {
 async function openCall({ room, conversation, video, initiator }) {
   incomingBrowserNotification?.close(); incomingBrowserNotification = null; document.title = 'Mowell Web';
   call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.screenStream = null; call.mediaWatchdogBusy = false; call.peers.clear();
+  setWebGroupLayout(Boolean(conversation.isGroup && video));
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
   $('share-screen-call').classList.remove('active'); $('share-screen-call').querySelector('span').textContent = 'Share';
@@ -1024,6 +1041,7 @@ async function openCall({ room, conversation, video, initiator }) {
     const ready = await Promise.all([mediaPromise, iceConfiguration, roomPromise]);
     call.stream = ready[0];
     const joined = ready[2];
+    if (video && joined.group) setWebGroupLayout(true);
     const localVideoTrack = call.stream.getVideoTracks()[0];
     if (localVideoTrack) localVideoTrack.contentHint = 'motion';
     $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video); $('local-video').classList.remove('rear');
@@ -1090,7 +1108,7 @@ async function endCall(notify = true, reason = 'ended') {
   $('remote-videos').querySelectorAll('[data-remote-media]').forEach((media) => media.remove());
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
-  $('local-video').srcObject = null; $('call-screen').classList.add('hidden'); $('call-screen').classList.remove('local-primary', 'controls-hidden');
+  $('local-video').srcObject = null; setWebGroupLayout(false); $('call-screen').classList.add('hidden'); $('call-screen').classList.remove('local-primary', 'controls-hidden');
   if (state.incoming?.data?.room === room) state.incoming = null;
   if (state.active) loadMessages({ preserve: true }).catch(() => {});
 }
@@ -1191,7 +1209,7 @@ async function addCallMember() {
   const username = prompt('Enter the exact Mowell username to add to this call:')?.trim().replace(/^@/, '').toLowerCase();
   if (!username) return;
   const button = $('add-call-member'); setLoading(button, true);
-  try { const result = await api(`/v1/calls/${encodeURIComponent(call.room)}/invite`, { method: 'POST', body: JSON.stringify({ username }) }); toast(`Invited ${result.displayName || username}`); }
+  try { const result = await api(`/v1/calls/${encodeURIComponent(call.room)}/invite`, { method: 'POST', body: JSON.stringify({ username }) }); if (call.video) setWebGroupLayout(true); toast(`Invited ${result.displayName || username}`); }
   catch (error) { toast(error.message); }
   finally { setLoading(button, false); }
 }
@@ -1285,8 +1303,8 @@ $('flip-call').onclick = flipCamera;
 $('add-call-member').onclick = addCallMember;
 $('share-screen-call').onclick = toggleScreenShare;
 $('call-screen').addEventListener('click', revealWebCallControls);
-$('local-video').addEventListener('click', (event) => { event.stopPropagation(); setWebPrimary(true); });
-$('remote-videos').addEventListener('click', (event) => { event.stopPropagation(); setWebPrimary(false); });
+$('local-video').addEventListener('click', (event) => { event.stopPropagation(); if (!call.group) setWebPrimary(true); else revealWebCallControls(); });
+$('remote-videos').addEventListener('click', (event) => { event.stopPropagation(); if (!call.group) setWebPrimary(false); else revealWebCallControls(); });
 window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.token) loadConversations().catch(() => {}); });
 
