@@ -52,7 +52,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.6.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.5.7.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -83,6 +83,17 @@ const callIceServers = [
     urls: ["turn:35.154.86.33:3478?transport=udp", "turn:35.154.86.33:3478?transport=tcp"],
     username: "turnuser",
     credential: "@Grapaxels1338"
+  },
+  { urls: ["stun:stun.relay.metered.ca:80"] },
+  {
+    urls: [
+      "turn:global.relay.metered.ca:80",
+      "turn:global.relay.metered.ca:80?transport=tcp",
+      "turn:global.relay.metered.ca:443",
+      "turns:global.relay.metered.ca:443?transport=tcp"
+    ],
+    username: "9385ce067902b45d0c90d944",
+    credential: "TS2yMQueZBcqV0yg"
   }
 ];
 const disposableDomains = new Set([
@@ -282,10 +293,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.json({
-  versionCode: 56,
-  versionName: "2.5.6",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.6.apk",
-    sha256: "4E632D539FF78E91DF39DAAC18CEEC54C39AFB7D3C932E8A329B1D11FFEF2FF0",
+  versionCode: 57,
+  versionName: "2.5.7",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.5.7.apk",
+    sha256: "13854DADF9EAD8424DC1F52E0A20AC5EC753E76B72B3ACEB0B35F37AC48E22D4",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }); });
 

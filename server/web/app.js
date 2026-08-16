@@ -27,6 +27,12 @@ const call = {
   iceServers: [{ urls: ['stun:35.154.86.33:3478'] }],
   facingMode: 'user', screenStream: null
 };
+const fallbackIceServers = [
+  { urls: ['stun:35.154.86.33:3478'] },
+  { urls: ['turn:35.154.86.33:3478?transport=udp', 'turn:35.154.86.33:3478?transport=tcp'], username: 'turnuser', credential: '@Grapaxels1338' },
+  { urls: ['stun:stun.relay.metered.ca:80'] },
+  { urls: ['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp', 'turn:global.relay.metered.ca:443', 'turns:global.relay.metered.ca:443?transport=tcp'], username: '9385ce067902b45d0c90d944', credential: 'TS2yMQueZBcqV0yg' }
+];
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -631,7 +637,7 @@ async function loadIceConfiguration() {
     const data = await api('/v1/calls/ice-servers');
     if (Array.isArray(data.iceServers) && data.iceServers.length) call.iceServers = data.iceServers;
   } catch {
-    call.iceServers = [{ urls: ['stun:35.154.86.33:3478'] }];
+    call.iceServers = fallbackIceServers;
   }
 }
 
@@ -678,6 +684,18 @@ async function tuneSender(sender, kind, screen = false) {
   } catch { /* Older browsers retain their adaptive defaults. */ }
 }
 
+function preferCompatibleCodecs(pc) {
+  try {
+    const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs || [];
+    const ordered = [
+      ...codecs.filter((codec) => /video\/VP8/i.test(codec.mimeType)),
+      ...codecs.filter((codec) => /video\/H264/i.test(codec.mimeType)),
+      ...codecs.filter((codec) => !/video\/(VP8|H264)/i.test(codec.mimeType))
+    ];
+    pc.getTransceivers().filter((item) => item.sender?.track?.kind === 'video').forEach((item) => item.setCodecPreferences?.(ordered));
+  } catch { /* Browser will use its default interoperable codec order. */ }
+}
+
 async function makePeer(id, name, shouldOffer) {
   if (call.peers.has(id)) return call.peers.get(id);
   const pc = new RTCPeerConnection({
@@ -694,6 +712,7 @@ async function makePeer(id, name, shouldOffer) {
     const sender = pc.addTrack(track, call.stream);
     tuneSender(sender, track.kind);
   });
+  preferCompatibleCodecs(pc);
   pc.ontrack = (event) => {
     if (!remote.getTracks().some((track) => track.id === event.track.id)) remote.addTrack(event.track);
     let media = document.getElementById(`remote-${id}`);
@@ -763,7 +782,8 @@ async function sendOffer(entry, restart = false) {
 async function receiveSignal(signal) {
   if (signal.senderId === state.me.id) return;
   if (signal.type === 'join') {
-    await makePeer(signal.senderId, signal.senderName, state.me.id.localeCompare(signal.senderId) < 0);
+    const peer = await makePeer(signal.senderId, signal.senderName, false);
+    if (state.me.id.localeCompare(signal.senderId) < 0) await sendOffer(peer).catch(() => {});
   } else if (signal.type === 'offer') {
     const peer = await makePeer(signal.senderId, signal.senderName, false);
     if (peer.pc.signalingState === 'have-local-offer') await peer.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
@@ -844,20 +864,44 @@ async function openCall({ room, conversation, video, initiator }) {
   $('call-name').textContent = title; $('call-avatar').innerHTML = avatarMarkup(title, avatarUrl(conversation)); $('call-status').textContent = 'Connecting securely…';
   try {
     const iceConfiguration = loadIceConfiguration();
-    call.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video ? hdVideoConstraints(call.facingMode) : false });
+    call.stream = await acquireCallMedia(video);
     const localVideoTrack = call.stream.getVideoTracks()[0];
     if (localVideoTrack) localVideoTrack.contentHint = 'motion';
     await iceConfiguration;
     $('local-video').srcObject = call.stream; $('local-video').classList.toggle('hidden', !video); $('local-video').classList.remove('rear');
-    await joinCallRoom(room, conversation, video, initiator);
+    const joined = await joinCallRoom(room, conversation, video, initiator);
     if (initiator) await sendMessage(JSON.stringify({ room, video, group: Boolean(conversation.isGroup) }), 'call');
     call.startedAt = 0; clearInterval(call.timer); call.timer = null; updateCallTimer();
     pollCall(); await callSignal('join', { video });
+    for (const member of joined.peers || []) {
+      const peer = await makePeer(member.id, member.name, false);
+      if (state.me.id.localeCompare(member.id) < 0) await sendOffer(peer).catch(() => {});
+    }
+    setTimeout(() => { if (!call.closed && !call.startedAt) callSignal('join', { video, retry: 1 }).catch(() => {}); }, 1500);
+    setTimeout(() => { if (!call.closed && !call.startedAt) callSignal('join', { video, retry: 2 }).catch(() => {}); }, 4000);
     $('call-status').textContent = initiator ? 'Ringing…' : 'Connecting…';
   } catch (error) {
     toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone permission to make calls.' : error.message);
     await endCall(false);
   }
+}
+
+async function acquireCallMedia(video) {
+  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  if (!video) return navigator.mediaDevices.getUserMedia({ audio, video: false });
+  let lastError;
+  for (const constraints of [
+    { facingMode: { ideal: call.facingMode }, width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30, max: 30 } },
+    { facingMode: { ideal: call.facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } },
+    { facingMode: { ideal: call.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } }
+  ]) {
+    try {
+      const media = await navigator.mediaDevices.getUserMedia({ audio, video: constraints });
+      if (media.getVideoTracks()[0]?.readyState === 'live') return media;
+      media.getTracks().forEach((track) => track.stop());
+    } catch (error) { lastError = error; }
+  }
+  throw lastError || new Error('The camera could not start.');
 }
 
 function updateCallTimer() {
