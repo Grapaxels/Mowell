@@ -36,6 +36,7 @@ import com.grapaxels.mowell.data.ConversationEntity
 import com.grapaxels.mowell.data.MessageEntity
 import com.grapaxels.mowell.network.AppUpdater
 import com.grapaxels.mowell.network.MessageNotifier
+import com.grapaxels.mowell.network.MessageNotificationService
 import com.grapaxels.mowell.network.NotificationPreferences
 import com.grapaxels.mowell.network.UpdateInfo
 import com.grapaxels.mowell.transport.BluetoothTransport
@@ -145,6 +146,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         bluetooth.startListening()
+        if (_session.value != null) MessageNotificationService.start(application)
         viewModelScope.launch {
             val general = conversations.value.find { it.id == "general" }
             dao.upsertConversation(general ?: ConversationEntity("general", "Mowell Circle", "Your private online + nearby space", true, System.currentTimeMillis()))
@@ -174,6 +176,12 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             while (isActive) {
                 if (_session.value != null) { syncAllConversations(); refreshConnectionRequests() }
                 delay(1_000)
+            }
+        }
+        viewModelScope.launch {
+            while (isActive) {
+                delay(300_000)
+                refreshUpdate(showPopup = true)
             }
         }
     }
@@ -467,7 +475,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
             _authBusy.value = true; _authError.value = null
             val result = block()
             _authBusy.value = false
-            if (result.session != null) { _session.value = result.session; _verificationEmail.value = null; refreshUpdate(showPopup = true) }
+            if (result.session != null) { _session.value = result.session; _verificationEmail.value = null; MessageNotificationService.start(getApplication()); refreshUpdate(showPopup = true) }
             else {
                 if (!result.verificationEmail.isNullOrBlank()) _verificationEmail.value = result.verificationEmail
                 _authError.value = result.error
@@ -560,7 +568,7 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun logout() { auth.logout(); _session.value = null; _userResults.value = emptyList(); _connectionRequests.value = emptyList(); notifiedConnectionRequests.clear() }
+    fun logout() { MessageNotificationService.stop(getApplication()); auth.logout(); _session.value = null; _userResults.value = emptyList(); _connectionRequests.value = emptyList(); notifiedConnectionRequests.clear() }
     fun updateDisplayName(name: String) {
         viewModelScope.launch {
             val result = auth.updateDisplayName(name)
@@ -605,14 +613,15 @@ class MowellViewModel(application: Application) : AndroidViewModel(application) 
     private fun passcodeHash(conversationId: String, passcode: String, salt: String) =
         MessageDigest.getInstance("SHA-256").digest("$conversationId:$salt:$passcode".toByteArray()).joinToString("") { "%02x".format(it) }
     fun dismissUpdate() { _showUpdatePopup.value = false }
-    fun checkForUpdates() { viewModelScope.launch { refreshUpdate(showPopup = true) } }
+    fun checkForUpdates() { viewModelScope.launch { refreshUpdate(showPopup = true, forcePopup = true) } }
     fun installUpdate(activity: Activity) { _update.value?.let { updater.downloadAndInstall(activity, it) } }
 
-    private suspend fun refreshUpdate(showPopup: Boolean) {
+    private suspend fun refreshUpdate(showPopup: Boolean, forcePopup: Boolean = false) {
         _updateStatus.value = "Checking for updates…"
+        val previousVersion = _update.value?.versionCode
         val found = updater.check()
         _update.value = found
         _updateStatus.value = found?.let { "Version ${it.versionName} is available" } ?: "Mowell is up to date"
-        if (showPopup && found != null) _showUpdatePopup.value = true
+        if (showPopup && found != null && (forcePopup || previousVersion != found.versionCode)) _showUpdatePopup.value = true
     }
 }

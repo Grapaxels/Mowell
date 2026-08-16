@@ -30,6 +30,7 @@ class MessageNotifier(private val context: Context) {
         val call = message.kind == "call"
         val canNotify = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         if (!canNotify && !call) return
+        if (!claim(message.id)) return
         val floating = NotificationPreferences.floating(context)
         val sound = if (call) NotificationPreferences.callSound(context) else NotificationPreferences.messageSound(context, message.conversationId)
         val channelId = if (call) "mowell_calls_${sound.hashCode()}" else "mowell_messages_${floating}_${message.conversationId.hashCode()}_${sound.hashCode()}"
@@ -120,6 +121,15 @@ class MessageNotifier(private val context: Context) {
         notificationPrefs.edit().putStringSet(key, ids).apply()
     }
 
+    private fun claim(messageId: String): Boolean = synchronized(deliveryLock) {
+        val key = "delivered_message_ids"
+        val delivered = notificationPrefs.getStringSet(key, emptySet()).orEmpty().toMutableSet()
+        if (messageId in delivered) return@synchronized false
+        if (delivered.size >= 512) delivered.clear()
+        delivered += messageId
+        notificationPrefs.edit().putStringSet(key, delivered).commit()
+    }
+
     fun showConnectionRequest(displayName: String) {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val sound = NotificationPreferences.messageSound(context, "connections")
@@ -161,5 +171,9 @@ class MessageNotifier(private val context: Context) {
             it.toIntOrNull()?.let { id -> NotificationManagerCompat.from(context).cancel(id) }
         }
         notificationPrefs.edit().remove(key).apply()
+    }
+
+    private companion object {
+        val deliveryLock = Any()
     }
 }

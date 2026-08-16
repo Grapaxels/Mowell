@@ -29,9 +29,14 @@ class AppUpdater(private val context: Context, private val auth: AuthRepository)
     suspend fun check(): UpdateInfo? = withContext(Dispatchers.IO) {
         try {
             if (auth.serverUrl.contains("example.invalid")) return@withContext null
-            val response = client.newCall(Request.Builder().url("${auth.serverUrl}/v1/app/version").build()).execute()
-            if (!response.isSuccessful) return@withContext null
-            val json = JSONObject(response.body?.string().orEmpty())
+            val request = Request.Builder()
+                .url("${auth.serverUrl}/v1/app/version?check=${System.currentTimeMillis()}")
+                .header("Cache-Control", "no-cache, no-store")
+                .build()
+            val json = client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                JSONObject(response.body?.string().orEmpty())
+            }
             val code = json.getInt("versionCode")
             val url = json.optString("apkUrl")
             val installed = if (Build.VERSION.SDK_INT >= 28) context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode else @Suppress("DEPRECATION") context.packageManager.getPackageInfo(context.packageName, 0).versionCode.toLong()
