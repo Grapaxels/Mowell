@@ -26,7 +26,7 @@ const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
   iceServers: [{ urls: ['stun:35.154.86.33:3478'] }],
-  facingMode: 'user', screenStream: null, controlsTimer: null
+  facingMode: 'user', screenStream: null, controlsTimer: null, heartbeatTimer: null, qualityUpgradeStarted: false
 };
 const fallbackIceServers = [
   { urls: ['stun:35.154.86.33:3478'] },
@@ -691,10 +691,10 @@ async function loadIceConfiguration() {
 function hdVideoConstraints(facingMode, exact = false) {
   return {
     facingMode: exact ? { exact: facingMode } : { ideal: facingMode },
-    width: { min: 1280, ideal: 3840 },
-    height: { min: 720, ideal: 2160 },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
     aspectRatio: { ideal: 16 / 9 },
-    frameRate: { ideal: 30, max: 30 }
+    frameRate: { ideal: 24, max: 30 }
   };
 }
 
@@ -732,10 +732,10 @@ async function tuneSender(sender, kind, screen = false) {
     const parameters = sender.getParameters();
     if (!parameters.encodings?.length) parameters.encodings = [{}];
     if (kind === 'video') {
-      parameters.degradationPreference = screen ? 'maintain-resolution' : 'maintain-framerate';
-      parameters.encodings[0].maxBitrate = screen ? 12000000 : 10000000;
+      parameters.degradationPreference = screen ? 'maintain-resolution' : 'balanced';
+      parameters.encodings[0].maxBitrate = screen ? 6000000 : 4000000;
       parameters.encodings[0].maxFramerate = 30;
-      parameters.encodings[0].scaleResolutionDownBy = 1;
+      delete parameters.encodings[0].scaleResolutionDownBy;
     } else {
       parameters.encodings[0].maxBitrate = 96000;
     }
@@ -743,35 +743,30 @@ async function tuneSender(sender, kind, screen = false) {
   } catch { /* Older browsers retain their adaptive defaults. */ }
 }
 
-function preferCompatibleCodecs(pc) {
+async function upgradeWebVideo() {
+  if (call.qualityUpgradeStarted || call.closed || !call.video || call.screenStream) return;
+  call.qualityUpgradeStarted = true;
   try {
-    const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs || [];
-    const ordered = [
-      ...codecs.filter((codec) => /video\/VP8/i.test(codec.mimeType)),
-      ...codecs.filter((codec) => /video\/H264/i.test(codec.mimeType)),
-      ...codecs.filter((codec) => !/video\/(VP8|H264)/i.test(codec.mimeType))
-    ];
-    pc.getTransceivers().filter((item) => item.sender?.track?.kind === 'video').forEach((item) => item.setCodecPreferences?.(ordered));
-  } catch { /* Browser will use its default interoperable codec order. */ }
+    const track = call.stream?.getVideoTracks()[0];
+    if (!track || track.readyState !== 'live') return;
+    await track.applyConstraints({ width: { ideal: 1920, max: 3840 }, height: { ideal: 1080, max: 2160 }, frameRate: { ideal: 30, max: 30 } });
+    for (const peer of call.peers.values()) {
+      const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
+      if (sender) await tuneSender(sender, 'video');
+    }
+  } catch { /* Keep the already-live HD stream when a camera cannot upgrade. */ }
 }
 
 async function makePeer(id, name, shouldOffer) {
   if (call.peers.has(id)) return call.peers.get(id);
-  const pc = new RTCPeerConnection({
-    iceServers: call.iceServers,
-    iceTransportPolicy: 'all',
-    iceCandidatePoolSize: 10,
-    bundlePolicy: 'max-bundle',
-    rtcpMuxPolicy: 'require'
-  });
+  const pc = new RTCPeerConnection({ iceServers: call.iceServers, iceTransportPolicy: 'all' });
   const remote = new MediaStream();
-  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null };
+  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null, makingOffer: false, needsOffer: false, needsIceRestart: false };
   call.peers.set(id, entry);
   call.stream?.getTracks().forEach((track) => {
     const sender = pc.addTrack(track, call.stream);
     tuneSender(sender, track.kind);
   });
-  preferCompatibleCodecs(pc);
   pc.ontrack = (event) => {
     if (!remote.getTracks().some((track) => track.id === event.track.id)) remote.addTrack(event.track);
     let media = document.getElementById(`remote-${id}`);
@@ -795,11 +790,16 @@ async function makePeer(id, name, shouldOffer) {
     $('call-status').textContent = call.video ? 'Call connected — receiving video' : 'Call connected';
   };
   pc.onicecandidate = (event) => { if (event.candidate) callSignal('ice', event.candidate.toJSON(), id).catch(() => {}); };
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'disconnected') scheduleIceRecovery(entry, 1400);
+    if (pc.iceConnectionState === 'failed') scheduleIceRecovery(entry, 100);
+  };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') {
       clearTimeout(entry.restartTimer);
       entry.restartAttempts = 0;
       startConnectedTimer();
+      upgradeWebVideo();
       $('call-status').textContent = call.video
         ? ($('remote-videos').classList.contains('has-remote-video') ? 'Video connected' : 'Call connected — receiving video')
         : 'Call connected';
@@ -825,6 +825,7 @@ function scheduleIceRecovery(entry, delay) {
     entry.restartAttempts += 1;
     // One deterministic offerer prevents both peers restarting simultaneously.
     if (state.me.id.localeCompare(entry.id) < 0) await sendOffer(entry, true).catch(() => {});
+    else await callSignal('join', { video: call.video, recovery: entry.restartAttempts }, entry.id).catch(() => {});
     entry.restartTimer = setTimeout(() => {
       entry.restartTimer = null;
       if (entry.pc.connectionState !== 'connected') scheduleIceRecovery(entry, 100);
@@ -833,9 +834,24 @@ function scheduleIceRecovery(entry, delay) {
 }
 
 async function sendOffer(entry, restart = false) {
-  if (entry.pc.signalingState !== 'stable') return;
-  await entry.pc.setLocalDescription(await entry.pc.createOffer(restart ? { iceRestart: true } : undefined));
-  await callSignal('offer', { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp }, entry.id);
+  if (entry.makingOffer || entry.pc.signalingState !== 'stable') {
+    entry.needsOffer = true;
+    entry.needsIceRestart = entry.needsIceRestart || restart;
+    return;
+  }
+  try {
+    entry.makingOffer = true;
+    await entry.pc.setLocalDescription(await entry.pc.createOffer(restart ? { iceRestart: true } : undefined));
+    await callSignal('offer', { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp }, entry.id);
+  } finally {
+    entry.makingOffer = false;
+  }
+  if (entry.needsOffer && entry.pc.signalingState === 'stable') {
+    const needsRestart = entry.needsIceRestart;
+    entry.needsOffer = false;
+    entry.needsIceRestart = false;
+    await sendOffer(entry, needsRestart);
+  }
 }
 
 async function receiveSignal(signal) {
@@ -851,11 +867,21 @@ async function receiveSignal(signal) {
     for (const candidate of peer.pending.splice(0)) await peer.pc.addIceCandidate(candidate).catch(() => {});
     await peer.pc.setLocalDescription(await peer.pc.createAnswer());
     await callSignal('answer', { type: peer.pc.localDescription.type, sdp: peer.pc.localDescription.sdp }, signal.senderId);
+    if (peer.needsOffer) {
+      const needsRestart = peer.needsIceRestart;
+      peer.needsOffer = false; peer.needsIceRestart = false;
+      await sendOffer(peer, needsRestart).catch(() => {});
+    }
   } else if (signal.type === 'answer') {
     const peer = await makePeer(signal.senderId, signal.senderName, false);
     if (peer.pc.signalingState === 'have-local-offer') {
       await peer.pc.setRemoteDescription(signal.payload);
       for (const candidate of peer.pending.splice(0)) await peer.pc.addIceCandidate(candidate).catch(() => {});
+      if (peer.needsOffer) {
+        const needsRestart = peer.needsIceRestart;
+        peer.needsOffer = false; peer.needsIceRestart = false;
+        await sendOffer(peer, needsRestart).catch(() => {});
+      }
     }
   } else if (signal.type === 'ice') {
     const peer = await makePeer(signal.senderId, signal.senderName, false);
@@ -874,11 +900,14 @@ async function pollCall() {
     try {
       const suffix = call.lastId ? `?afterId=${encodeURIComponent(call.lastId)}` : '';
       const data = await api(`/v1/calls/${encodeURIComponent(call.room)}/signals${suffix}`);
-      for (const signal of data.signals || []) { await receiveSignal(signal); call.lastId = signal.id; }
+      for (const signal of data.signals || []) {
+        call.lastId = signal.id;
+        try { await receiveSignal(signal); } catch { /* A stale signal must not stop newer negotiation data. */ }
+      }
     } catch (error) {
       if ([404, 410].includes(error.status)) { endCall(false); return; }
     }
-    await sleep(100);
+    await sleep(75);
   }
 }
 
@@ -931,7 +960,7 @@ async function joinCallRoom(room, conversation, video, initiator) {
 
 async function openCall({ room, conversation, video, initiator }) {
   incomingBrowserNotification?.close(); incomingBrowserNotification = null; document.title = 'Mowell Web';
-  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.screenStream = null; call.peers.clear();
+  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.screenStream = null; call.qualityUpgradeStarted = false; call.peers.clear();
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
   $('share-screen-call').classList.remove('active'); $('share-screen-call').querySelector('span').textContent = 'Share';
@@ -952,12 +981,14 @@ async function openCall({ room, conversation, video, initiator }) {
     if (initiator) await sendMessage(JSON.stringify({ room, video, group: Boolean(conversation.isGroup) }), 'call');
     call.startedAt = 0; clearInterval(call.timer); call.timer = null; updateCallTimer();
     pollCall(); await callSignal('join', { video });
-    for (const member of joined.peers || []) {
+    await Promise.all((joined.peers || []).map(async (member) => {
       const peer = await makePeer(member.id, member.name, false);
       if (state.me.id.localeCompare(member.id) < 0) await sendOffer(peer).catch(() => {});
-    }
-    setTimeout(() => { if (!call.closed && !call.startedAt) callSignal('join', { video, retry: 1 }).catch(() => {}); }, 1500);
-    setTimeout(() => { if (!call.closed && !call.startedAt) callSignal('join', { video, retry: 2 }).catch(() => {}); }, 4000);
+    }));
+    setTimeout(() => { if (!call.closed && !call.startedAt) callSignal('join', { video, retry: 1 }).catch(() => {}); }, 900);
+    setTimeout(() => { if (!call.closed && !call.startedAt) callSignal('join', { video, retry: 2 }).catch(() => {}); }, 2500);
+    clearInterval(call.heartbeatTimer);
+    call.heartbeatTimer = setInterval(() => { if (!call.closed) callSignal('heartbeat').catch(() => {}); }, 5000);
     $('call-status').textContent = initiator ? 'Ringing…' : 'Connecting…';
   } catch (error) {
     toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone permission to make calls.' : error.message);
@@ -970,13 +1001,13 @@ async function acquireCallMedia(video) {
   if (!video) return navigator.mediaDevices.getUserMedia({ audio, video: false });
   let lastError;
   for (const constraints of [
-    { facingMode: { ideal: call.facingMode }, width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30, max: 30 } },
-    { facingMode: { ideal: call.facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } },
-    { facingMode: { ideal: call.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } }
+    hdVideoConstraints(call.facingMode),
+    { facingMode: { ideal: call.facingMode } }
   ]) {
     try {
       const media = await navigator.mediaDevices.getUserMedia({ audio, video: constraints });
-      if (media.getVideoTracks()[0]?.readyState === 'live') return media;
+      const track = media.getVideoTracks()[0];
+      if (track?.readyState === 'live') { track.contentHint = 'motion'; return media; }
       media.getTracks().forEach((track) => track.stop());
     } catch (error) { lastError = error; }
   }
@@ -1000,7 +1031,7 @@ function startConnectedTimer() {
 async function endCall(notify = true, reason = 'ended') {
   if (call.closed) return;
   const room = call.room;
-  call.closed = true; clearInterval(call.timer); clearTimeout(call.controlsTimer);
+  call.closed = true; clearInterval(call.timer); clearInterval(call.heartbeatTimer); call.heartbeatTimer = null; clearTimeout(call.controlsTimer);
   if (notify) await callSignal('leave', { reason }).catch(() => {});
   call.screenStream?.getTracks().forEach((track) => { track.onended = null; track.stop(); }); call.screenStream = null;
   call.stream?.getTracks().forEach((track) => track.stop());
