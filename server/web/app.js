@@ -25,14 +25,12 @@ const state = {
 const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
-  iceServers: [{ urls: ['stun:35.154.86.33:3478'] }],
+  iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80'] }],
   facingMode: 'user', screenStream: null, controlsTimer: null, heartbeatTimer: null, mediaWatchdogTimer: null, mediaWatchdogBusy: false, group: false
 };
 const fallbackIceServers = [
-  { urls: ['stun:35.154.86.33:3478'] },
-  { urls: ['turn:35.154.86.33:3478?transport=udp', 'turn:35.154.86.33:3478?transport=tcp'], username: 'turnuser', credential: '@Grapaxels1338' },
-  { urls: ['stun:stun.relay.metered.ca:80'] },
-  { urls: ['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp', 'turn:global.relay.metered.ca:443', 'turns:global.relay.metered.ca:443?transport=tcp'], username: '9385ce067902b45d0c90d944', credential: 'TS2yMQueZBcqV0yg' }
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80'] },
+  { urls: ['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp'], username: '9385ce067902b45d0c90d944', credential: 'TS2yMQueZBcqV0yg' }
 ];
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({
@@ -767,6 +765,24 @@ async function tuneSender(sender, kind, screen = false, recovery = false) {
   } catch { /* Older browsers retain their adaptive defaults. */ }
 }
 
+function preferCompatibleVideoCodecs(pc) {
+  try {
+    const codecs = RTCRtpSender.getCapabilities?.('video')?.codecs;
+    if (!codecs?.length) return;
+    const rank = (codec) => {
+      const mime = String(codec.mimeType || '').toLowerCase();
+      if (mime === 'video/vp8') return 0;
+      if (mime === 'video/h264') return 1;
+      if (mime === 'video/rtx' || mime === 'video/red' || mime === 'video/ulpfec') return 3;
+      return 2;
+    };
+    const preferred = [...codecs].sort((left, right) => rank(left) - rank(right));
+    pc.getTransceivers()
+      .filter((transceiver) => transceiver.sender?.track?.kind === 'video' && transceiver.setCodecPreferences)
+      .forEach((transceiver) => transceiver.setCodecPreferences(preferred));
+  } catch { /* Codec preferences are optional on older Android WebViews. */ }
+}
+
 async function refreshWebOutboundVideo(id) {
   const peer = call.peers.get(id);
   const track = call.stream?.getVideoTracks()[0];
@@ -847,6 +863,7 @@ async function makePeer(id, name, shouldOffer) {
     const sender = pc.addTrack(track, call.stream);
     tuneSender(sender, track.kind);
   });
+  preferCompatibleVideoCodecs(pc);
   pc.ontrack = (event) => {
     if (!remote.getTracks().some((track) => track.id === event.track.id)) remote.addTrack(event.track);
     let media = document.getElementById(`remote-${id}`);
@@ -1190,6 +1207,7 @@ async function toggleScreenShare() {
         await tuneSender(sender, 'video', true);
       } else {
         sender = peer.pc.addTrack(screenTrack, shared);
+        preferCompatibleVideoCodecs(peer.pc);
         await tuneSender(sender, 'video', true);
         await sendOffer(peer);
       }

@@ -52,7 +52,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.6.4.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.6.5.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -75,22 +75,16 @@ const issueToken = (user, extra = {}) => jwt.sign({ sub: user._id.toString(), us
 const usernamePattern = /^[a-z0-9_]{3,24}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-// Fixed Metered ICE configuration requested for Mowell. The route exposing it
-// is authenticated so it is not included in the public web bundle.
+// Only advertise ICE routes that produce publicly reachable relay candidates.
+// The Grapaxels coturn host currently advertises its AWS-private 172.31.x.x
+// address, so it must stay out of the client list until external-ip mapping is
+// corrected. The route is authenticated to limit casual credential scraping.
 const callIceServers = [
-  { urls: ["stun:35.154.86.33:3478"] },
-  {
-    urls: ["turn:35.154.86.33:3478?transport=udp", "turn:35.154.86.33:3478?transport=tcp"],
-    username: "turnuser",
-    credential: "@Grapaxels1338"
-  },
-  { urls: ["stun:stun.relay.metered.ca:80"] },
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun.relay.metered.ca:80"] },
   {
     urls: [
       "turn:global.relay.metered.ca:80",
-      "turn:global.relay.metered.ca:80?transport=tcp",
-      "turn:global.relay.metered.ca:443",
-      "turns:global.relay.metered.ca:443?transport=tcp"
+      "turn:global.relay.metered.ca:80?transport=tcp"
     ],
     username: "9385ce067902b45d0c90d944",
     credential: "TS2yMQueZBcqV0yg"
@@ -293,10 +287,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.json({
-  versionCode: 64,
-  versionName: "2.6.4",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.6.4.apk",
-  sha256: "B44ED2DEE1463FC397844AA3163AB22097348C8F64447C2D2C475946DFB8528E",
+  versionCode: 65,
+  versionName: "2.6.5",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.6.5.apk",
+  sha256: "90091BD739BEB506D793D5D9867541261D14F70CB636A84CDF0157B4D1D077E1",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }); });
 
