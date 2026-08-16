@@ -702,13 +702,11 @@ function setWebGroupLayout(enabled) {
   const container = $('remote-videos'); const local = $('local-video'); let tile = $('web-local-tile');
   call.group = Boolean(enabled);
   $('call-screen').classList.toggle('group-call', call.group);
-  if (call.group && !tile) {
-    tile = document.createElement('div'); tile.id = 'web-local-tile'; tile.className = 'mesh-local-tile mesh-item';
-    const name = document.createElement('span'); name.className = 'mesh-name'; name.textContent = 'You';
-    tile.append(local, name); container.prepend(tile);
-  } else if (!call.group && tile) {
+  if (call.group) $('call-screen').classList.remove('local-primary');
+  if (tile) {
     container.insertAdjacentElement('afterend', local); tile.remove();
   }
+  if (!call.group) container.querySelectorAll('.pinned').forEach((item) => item.classList.remove('pinned'));
   updateRemoteVideoLayout();
 }
 
@@ -716,9 +714,11 @@ function updateRemoteVideoLayout() {
   const container = $('remote-videos');
   const allVideos = [...container.querySelectorAll('video[data-remote-media]')];
   const videos = allVideos.filter((video) => video.videoWidth > 0 && video.videoHeight > 0);
-  const hasVideo = videos.length > 0; const meshCount = Math.min(6, allVideos.length + (call.group ? 1 : 0));
-  container.classList.remove('mesh-1', 'mesh-2', 'mesh-3', 'mesh-4', 'mesh-5', 'mesh-6');
+  const hasVideo = videos.length > 0; const meshCount = Math.min(5, allVideos.length);
+  const pinned = container.querySelector('video[data-remote-media].pinned');
+  container.classList.remove('mesh-1', 'mesh-2', 'mesh-3', 'mesh-4', 'mesh-5', 'mesh-6', 'has-pin', 'pin-1', 'pin-2', 'pin-3', 'pin-4', 'pin-5');
   if (meshCount) container.classList.add(`mesh-${meshCount}`);
+  if (pinned) container.classList.add('has-pin', `pin-${meshCount}`);
   container.classList.toggle('has-remote-video', hasVideo);
   container.classList.toggle('single-remote-video', !call.group && videos.length === 1);
   container.querySelector('.call-waiting')?.classList.toggle('hidden', hasVideo);
@@ -729,6 +729,14 @@ function updateRemoteVideoLayout() {
     video.style.inset = single ? '0' : '';
   });
   if (hasVideo) $('call-status').textContent = 'Video connected';
+}
+
+function toggleWebPinned(video) {
+  if (!call.group || !video) return;
+  const alreadyPinned = video.classList.contains('pinned');
+  $('remote-videos').querySelectorAll('video[data-remote-media].pinned').forEach((item) => item.classList.remove('pinned'));
+  if (!alreadyPinned) video.classList.add('pinned');
+  updateRemoteVideoLayout();
 }
 
 function revealWebCallControls() {
@@ -775,6 +783,15 @@ async function refreshWebOutboundVideo(id) {
   } catch { /* The next watchdog pass can retry. */ }
 }
 
+function forceWebRelay(peer) {
+  if (peer.relayForced) return true;
+  try {
+    peer.pc.setConfiguration({ ...peer.pc.getConfiguration(), iceTransportPolicy: 'relay' });
+    peer.relayForced = true;
+    return true;
+  } catch { return false; }
+}
+
 async function inspectWebMedia() {
   if (call.mediaWatchdogBusy || call.closed || !call.video) return;
   call.mediaWatchdogBusy = true;
@@ -807,7 +824,8 @@ async function inspectWebMedia() {
         peer.lastStallRequest = Date.now();
         peer.stallCount += 1;
         if (media) { media.srcObject = null; media.srcObject = peer.remote; media.play().catch(() => setTimeout(() => media.play().catch(() => {}), 120)); }
-        await callSignal('media', { requestVideo: true }, peer.id).catch(() => {});
+        const relay = peer.stallCount > 1 && forceWebRelay(peer);
+        await callSignal('media', { requestVideo: true, forceRelay: relay }, peer.id).catch(() => {});
         if (peer.stallCount > 1) {
           if (state.me.id.localeCompare(peer.id) < 0) sendOffer(peer, true).catch(() => {});
           else callSignal('join', { video: call.video, videoRecovery: true }, peer.id).catch(() => {});
@@ -821,9 +839,9 @@ async function inspectWebMedia() {
 
 async function makePeer(id, name, shouldOffer) {
   if (call.peers.has(id)) return call.peers.get(id);
-  const pc = new RTCPeerConnection({ iceServers: call.iceServers, iceTransportPolicy: 'all' });
+  const pc = new RTCPeerConnection({ iceServers: call.iceServers, iceTransportPolicy: 'all', iceCandidatePoolSize: 2, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
   const remote = new MediaStream();
-  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null, makingOffer: false, needsOffer: false, needsIceRestart: false, inboundBytes: -1, inboundFrames: -1, lastMediaAt: Date.now(), lastStallRequest: 0, lastVideoRefresh: 0, stallCount: 0 };
+  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null, makingOffer: false, needsOffer: false, needsIceRestart: false, relayForced: false, relayCandidate: false, inboundBytes: -1, inboundFrames: -1, lastMediaAt: Date.now(), lastStallRequest: 0, lastVideoRefresh: 0, stallCount: 0 };
   call.peers.set(id, entry);
   call.stream?.getTracks().forEach((track) => {
     const sender = pc.addTrack(track, call.stream);
@@ -852,7 +870,7 @@ async function makePeer(id, name, shouldOffer) {
     event.track.addEventListener('ended', updateRemoteVideoLayout);
     $('call-status').textContent = call.video ? 'Call connected — receiving video' : 'Call connected';
   };
-  pc.onicecandidate = (event) => { if (event.candidate) callSignal('ice', event.candidate.toJSON(), id).catch(() => {}); };
+  pc.onicecandidate = (event) => { if (event.candidate) { if (event.candidate.type === 'relay' || String(event.candidate.candidate).includes(' typ relay ')) entry.relayCandidate = true; callSignal('ice', event.candidate.toJSON(), id).catch(() => {}); } };
   pc.oniceconnectionstatechange = () => {
     if (pc.iceConnectionState === 'disconnected') scheduleIceRecovery(entry, 1400);
     if (pc.iceConnectionState === 'failed') scheduleIceRecovery(entry, 100);
@@ -877,7 +895,7 @@ async function makePeer(id, name, shouldOffer) {
 
 function scheduleIceRecovery(entry, delay) {
   if (call.closed || entry.restartTimer) return;
-  if (entry.restartAttempts >= 3) {
+  if (entry.restartAttempts >= 4) {
     $('call-status').textContent = 'Unable to restore this call';
     toast('The WebRTC connection could not be restored.');
     return;
@@ -887,9 +905,10 @@ function scheduleIceRecovery(entry, delay) {
     entry.restartTimer = null;
     if (call.closed || entry.pc.connectionState === 'connected') return;
     entry.restartAttempts += 1;
+    if (entry.restartAttempts >= 2) forceWebRelay(entry);
     // One deterministic offerer prevents both peers restarting simultaneously.
     if (state.me.id.localeCompare(entry.id) < 0) await sendOffer(entry, true).catch(() => {});
-    else await callSignal('join', { video: call.video, recovery: entry.restartAttempts }, entry.id).catch(() => {});
+    else await callSignal('join', { video: call.video, recovery: entry.restartAttempts, forceRelay: entry.relayForced }, entry.id).catch(() => {});
     entry.restartTimer = setTimeout(() => {
       entry.restartTimer = null;
       if (entry.pc.connectionState !== 'connected') scheduleIceRecovery(entry, 100);
@@ -922,7 +941,8 @@ async function receiveSignal(signal) {
   if (signal.senderId === state.me.id) return;
   if (signal.type === 'join') {
     const peer = await makePeer(signal.senderId, signal.senderName, false);
-    if (state.me.id.localeCompare(signal.senderId) < 0) await sendOffer(peer).catch(() => {});
+    if (signal.payload?.forceRelay) forceWebRelay(peer);
+    if (state.me.id.localeCompare(signal.senderId) < 0) await sendOffer(peer, Boolean(signal.payload?.forceRelay)).catch(() => {});
   } else if (signal.type === 'offer') {
     const peer = await makePeer(signal.senderId, signal.senderName, false);
     if (peer.pc.signalingState === 'have-local-offer') await peer.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
@@ -953,9 +973,13 @@ async function receiveSignal(signal) {
     else peer.pending.push(signal.payload);
   } else if (signal.type === 'leave') {
     removePeer(signal.senderId);
-    if (!call.conversation?.isGroup) endCall(false);
+    if (!call.group) endCall(false);
   } else if (signal.type === 'media') {
-    if (signal.payload?.requestVideo) await refreshWebOutboundVideo(signal.senderId);
+    if (signal.payload?.requestVideo) {
+      const peer = call.peers.get(signal.senderId);
+      if (peer && signal.payload?.forceRelay) forceWebRelay(peer);
+      await refreshWebOutboundVideo(signal.senderId);
+    }
     else { call.video = Boolean(signal.payload?.video); if (call.video && call.group) setWebGroupLayout(true); }
   }
 }
@@ -1184,24 +1208,69 @@ async function toggleScreenShare() {
   }
 }
 
+async function captureWebCamera(facingMode, deviceId = '') {
+  const attempts = [];
+  if (deviceId) attempts.push({ deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } });
+  attempts.push(
+    hdVideoConstraints(facingMode, true),
+    { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+    { facingMode: { ideal: facingMode } }
+  );
+  let lastError;
+  for (const video of attempts) {
+    try { return await navigator.mediaDevices.getUserMedia({ video, audio: false }); }
+    catch (error) { lastError = error; }
+  }
+  throw lastError || new Error('Camera unavailable');
+}
+
 async function flipCamera() {
   if (call.screenStream) return toast('Stop screen sharing before switching the camera.');
   const oldTrack = call.stream?.getVideoTracks()[0];
   if (!oldTrack) return toast('Start video before flipping the camera.');
   const nextFacing = call.facingMode === 'user' ? 'environment' : 'user';
+  const previousFacing = call.facingMode;
+  const enabled = oldTrack.enabled;
+  let acquired = null;
   try {
-    const camera = await navigator.mediaDevices.getUserMedia({ video: hdVideoConstraints(nextFacing, true), audio: false });
-    const newTrack = camera.getVideoTracks()[0];
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'videoinput');
+    const currentDevice = oldTrack.getSettings().deviceId;
+    const currentIndex = devices.findIndex((device) => device.deviceId === currentDevice);
+    const nextDeviceId = devices.length > 1 ? (devices[(currentIndex >= 0 ? currentIndex + 1 : 1) % devices.length]?.deviceId || '') : '';
+    call.stream.removeTrack(oldTrack);
+    oldTrack.stop();
+    acquired = await captureWebCamera(nextFacing, nextDeviceId);
+    const newTrack = acquired.getVideoTracks()[0];
+    if (!newTrack) throw new Error('Camera track unavailable');
     newTrack.contentHint = 'motion';
+    newTrack.enabled = enabled;
     for (const peer of call.peers.values()) {
       const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
       if (sender) { await sender.replaceTrack(newTrack); tuneSender(sender, 'video'); }
     }
-    call.stream.removeTrack(oldTrack); oldTrack.stop(); call.stream.addTrack(newTrack);
+    call.stream.addTrack(newTrack);
     call.facingMode = nextFacing;
     $('local-video').classList.toggle('rear', nextFacing === 'environment');
     $('local-video').srcObject = call.stream;
-  } catch { toast('Another camera is not available on this device.'); }
+    $('local-video').play().catch(() => {});
+  } catch {
+    acquired?.getTracks().forEach((track) => track.stop());
+    try {
+      const restored = await captureWebCamera(previousFacing);
+      const restoredTrack = restored.getVideoTracks()[0];
+      restoredTrack.enabled = enabled;
+      for (const peer of call.peers.values()) {
+        const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
+        if (sender) await sender.replaceTrack(restoredTrack);
+      }
+      call.stream.addTrack(restoredTrack);
+      call.facingMode = previousFacing;
+      $('local-video').classList.toggle('rear', previousFacing === 'environment');
+      $('local-video').srcObject = call.stream;
+      $('local-video').play().catch(() => {});
+    } catch { /* The media watchdog reports a camera that cannot be restored. */ }
+    toast('Another camera is not available on this device.');
+  }
 }
 
 async function addCallMember() {
@@ -1304,7 +1373,13 @@ $('add-call-member').onclick = addCallMember;
 $('share-screen-call').onclick = toggleScreenShare;
 $('call-screen').addEventListener('click', revealWebCallControls);
 $('local-video').addEventListener('click', (event) => { event.stopPropagation(); if (!call.group) setWebPrimary(true); else revealWebCallControls(); });
-$('remote-videos').addEventListener('click', (event) => { event.stopPropagation(); if (!call.group) setWebPrimary(false); else revealWebCallControls(); });
+$('remote-videos').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const video = event.target.closest?.('video[data-remote-media]');
+  if (call.group && video) toggleWebPinned(video);
+  else if (!call.group) setWebPrimary(false);
+  revealWebCallControls();
+});
 window.addEventListener('beforeunload', () => { call.stream?.getTracks().forEach((track) => track.stop()); state.mediaUrls.forEach((url) => URL.revokeObjectURL(url)); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.token) loadConversations().catch(() => {}); });
 

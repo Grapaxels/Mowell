@@ -52,7 +52,7 @@ app.use(express.static(publicRoot, {
   setHeaders: (res, path) => {
     if (path.endsWith(".apk")) {
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.6.3.apk");
+      res.setHeader("Content-Disposition", "attachment; filename=Mowell-v2.6.4.apk");
       res.setHeader("Cache-Control", "public, max-age=300, immutable");
     }
   }
@@ -293,10 +293,10 @@ app.get("/health/email", (_req, res) => {
   });
 });
 app.get("/v1/app/version", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.json({
-  versionCode: 63,
-  versionName: "2.6.3",
-  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.6.3.apk",
-  sha256: "5241CD04242E869D5A9CC6139945554279C5C6247DFDD09318979CBF01EC822D",
+  versionCode: 64,
+  versionName: "2.6.4",
+  apkUrl: "https://mowell-api.grapaxels.in/Mowell-v2.6.4.apk",
+  sha256: "B44ED2DEE1463FC397844AA3163AB22097348C8F64447C2D2C475946DFB8528E",
   required: String(process.env.ANDROID_UPDATE_REQUIRED).toLowerCase() === "true"
 }); });
 
@@ -808,13 +808,13 @@ app.post("/v1/calls/:room/signals", auth, async (req, res) => {
         const heartbeats = { ...(call.participantHeartbeats || {}) };
         delete heartbeats[req.auth.sub];
         call.participantHeartbeats = heartbeats;
-        const activeCutoff = Date.now() - 30000;
-        const hasActiveMember = call.participants.some((id) => Number(heartbeats[id.toString()] || 0) >= activeCutoff);
-        if (hasActiveMember) {
+        if (call.participants.length) {
+          // Do not use a momentary heartbeat snapshot to decide that the
+          // whole room is empty. Mobile background scheduling can delay a
+          // heartbeat while another invitee is pressing Decline.
           call.markModified("participantHeartbeats");
           await call.save();
         } else {
-          await endCall(call, req.body.payload?.reason || "empty", req.auth.sub);
           await CallSignal.deleteMany({ room });
           await CallRoom.deleteOne({ _id: call._id });
         }
