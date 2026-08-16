@@ -26,7 +26,7 @@ const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
   iceServers: [{ urls: ['stun:35.154.86.33:3478'] }],
-  facingMode: 'user', screenStream: null, controlsTimer: null, heartbeatTimer: null, qualityUpgradeStarted: false
+  facingMode: 'user', screenStream: null, controlsTimer: null, heartbeatTimer: null, mediaWatchdogTimer: null, mediaWatchdogBusy: false
 };
 const fallbackIceServers = [
   { urls: ['stun:35.154.86.33:3478'] },
@@ -691,10 +691,10 @@ async function loadIceConfiguration() {
 function hdVideoConstraints(facingMode, exact = false) {
   return {
     facingMode: exact ? { exact: facingMode } : { ideal: facingMode },
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
     aspectRatio: { ideal: 16 / 9 },
-    frameRate: { ideal: 24, max: 30 }
+    frameRate: { ideal: 30, max: 30 }
   };
 }
 
@@ -727,13 +727,13 @@ function setWebPrimary(local) {
   revealWebCallControls();
 }
 
-async function tuneSender(sender, kind, screen = false) {
+async function tuneSender(sender, kind, screen = false, recovery = false) {
   try {
     const parameters = sender.getParameters();
     if (!parameters.encodings?.length) parameters.encodings = [{}];
     if (kind === 'video') {
       parameters.degradationPreference = screen ? 'maintain-resolution' : 'balanced';
-      parameters.encodings[0].maxBitrate = screen ? 6000000 : 4000000;
+      parameters.encodings[0].maxBitrate = recovery ? 2400000 : (screen ? 8000000 : 6000000);
       parameters.encodings[0].maxFramerate = 30;
       delete parameters.encodings[0].scaleResolutionDownBy;
     } else {
@@ -743,25 +743,71 @@ async function tuneSender(sender, kind, screen = false) {
   } catch { /* Older browsers retain their adaptive defaults. */ }
 }
 
-async function upgradeWebVideo() {
-  if (call.qualityUpgradeStarted || call.closed || !call.video || call.screenStream) return;
-  call.qualityUpgradeStarted = true;
+async function refreshWebOutboundVideo(id) {
+  const peer = call.peers.get(id);
+  const track = call.stream?.getVideoTracks()[0];
+  if (!peer || !track || track.readyState !== 'live' || Date.now() - (peer.lastVideoRefresh || 0) < 5000) return;
+  peer.lastVideoRefresh = Date.now();
+  const refreshedAt = peer.lastVideoRefresh;
   try {
-    const track = call.stream?.getVideoTracks()[0];
-    if (!track || track.readyState !== 'live') return;
-    await track.applyConstraints({ width: { ideal: 1920, max: 3840 }, height: { ideal: 1080, max: 2160 }, frameRate: { ideal: 30, max: 30 } });
+    const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
+    if (!sender) return;
+    await sender.replaceTrack(track);
+    await tuneSender(sender, 'video', false, true);
+    if (peer.pc.signalingState === 'stable') await sendOffer(peer);
+    setTimeout(() => { if (!call.closed && peer.lastVideoRefresh === refreshedAt && sender.track?.readyState === 'live') tuneSender(sender, 'video'); }, 8000);
+  } catch { /* The next watchdog pass can retry. */ }
+}
+
+async function inspectWebMedia() {
+  if (call.mediaWatchdogBusy || call.closed || !call.video) return;
+  call.mediaWatchdogBusy = true;
+  try {
     for (const peer of call.peers.values()) {
-      const sender = peer.pc.getSenders().find((item) => item.track?.kind === 'video');
-      if (sender) await tuneSender(sender, 'video');
+      if (peer.pc.connectionState !== 'connected') continue;
+      let bytes = 0; let frames = 0; let hasFrames = false;
+      try {
+        const stats = await peer.pc.getStats();
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && !report.isRemote && (report.kind === 'video' || report.mediaType === 'video')) {
+            bytes += Number(report.bytesReceived || 0);
+            if (report.framesDecoded !== undefined) { hasFrames = true; frames += Number(report.framesDecoded || 0); }
+          }
+        });
+      } catch { /* A later pass will retry stats. */ }
+      const progressed = hasFrames ? frames > peer.inboundFrames : bytes > peer.inboundBytes;
+      if (progressed) {
+        peer.lastMediaAt = Date.now(); peer.inboundBytes = bytes; peer.inboundFrames = frames;
+        peer.stallCount = 0;
+        continue;
+      }
+      if (peer.inboundBytes < 0) {
+        peer.inboundBytes = bytes; peer.inboundFrames = frames; peer.lastMediaAt = Date.now();
+        continue;
+      }
+      const media = document.getElementById(`remote-${peer.id}`);
+      if (media?.paused) media.play().catch(() => {});
+      if (Date.now() - peer.lastMediaAt > 4500 && Date.now() - peer.lastStallRequest > 6000) {
+        peer.lastStallRequest = Date.now();
+        peer.stallCount += 1;
+        if (media) { media.srcObject = null; media.srcObject = peer.remote; media.play().catch(() => setTimeout(() => media.play().catch(() => {}), 120)); }
+        await callSignal('media', { requestVideo: true }, peer.id).catch(() => {});
+        if (peer.stallCount > 1) {
+          if (state.me.id.localeCompare(peer.id) < 0) sendOffer(peer, true).catch(() => {});
+          else callSignal('join', { video: call.video, videoRecovery: true }, peer.id).catch(() => {});
+        }
+      }
     }
-  } catch { /* Keep the already-live HD stream when a camera cannot upgrade. */ }
+  } finally {
+    call.mediaWatchdogBusy = false;
+  }
 }
 
 async function makePeer(id, name, shouldOffer) {
   if (call.peers.has(id)) return call.peers.get(id);
   const pc = new RTCPeerConnection({ iceServers: call.iceServers, iceTransportPolicy: 'all' });
   const remote = new MediaStream();
-  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null, makingOffer: false, needsOffer: false, needsIceRestart: false };
+  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null, makingOffer: false, needsOffer: false, needsIceRestart: false, inboundBytes: -1, inboundFrames: -1, lastMediaAt: Date.now(), lastStallRequest: 0, lastVideoRefresh: 0, stallCount: 0 };
   call.peers.set(id, entry);
   call.stream?.getTracks().forEach((track) => {
     const sender = pc.addTrack(track, call.stream);
@@ -785,7 +831,8 @@ async function makePeer(id, name, shouldOffer) {
       $('remote-videos').append(media);
     }
     media.srcObject = remote; media.play().catch(() => {});
-    event.track.addEventListener('unmute', updateRemoteVideoLayout);
+    event.track.addEventListener('unmute', () => { entry.lastMediaAt = Date.now(); updateRemoteVideoLayout(); });
+    event.track.addEventListener('mute', () => { entry.lastMediaAt = 0; });
     event.track.addEventListener('ended', updateRemoteVideoLayout);
     $('call-status').textContent = call.video ? 'Call connected — receiving video' : 'Call connected';
   };
@@ -798,8 +845,9 @@ async function makePeer(id, name, shouldOffer) {
     if (pc.connectionState === 'connected') {
       clearTimeout(entry.restartTimer);
       entry.restartAttempts = 0;
+      entry.lastMediaAt = Date.now();
+      entry.stallCount = 0;
       startConnectedTimer();
-      upgradeWebVideo();
       $('call-status').textContent = call.video
         ? ($('remote-videos').classList.contains('has-remote-video') ? 'Video connected' : 'Call connected — receiving video')
         : 'Call connected';
@@ -891,7 +939,8 @@ async function receiveSignal(signal) {
     removePeer(signal.senderId);
     if (!call.conversation?.isGroup) endCall(false);
   } else if (signal.type === 'media') {
-    call.video = Boolean(signal.payload?.video);
+    if (signal.payload?.requestVideo) await refreshWebOutboundVideo(signal.senderId);
+    else call.video = Boolean(signal.payload?.video);
   }
 }
 
@@ -960,7 +1009,7 @@ async function joinCallRoom(room, conversation, video, initiator) {
 
 async function openCall({ room, conversation, video, initiator }) {
   incomingBrowserNotification?.close(); incomingBrowserNotification = null; document.title = 'Mowell Web';
-  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.screenStream = null; call.qualityUpgradeStarted = false; call.peers.clear();
+  call.closed = false; call.room = room; call.conversation = conversation; call.video = video; call.lastId = ''; call.facingMode = 'user'; call.screenStream = null; call.mediaWatchdogBusy = false; call.peers.clear();
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');
   $('share-screen-call').classList.remove('active'); $('share-screen-call').querySelector('span').textContent = 'Share';
@@ -989,6 +1038,8 @@ async function openCall({ room, conversation, video, initiator }) {
     setTimeout(() => { if (!call.closed && !call.startedAt) callSignal('join', { video, retry: 2 }).catch(() => {}); }, 2500);
     clearInterval(call.heartbeatTimer);
     call.heartbeatTimer = setInterval(() => { if (!call.closed) callSignal('heartbeat').catch(() => {}); }, 5000);
+    clearInterval(call.mediaWatchdogTimer);
+    call.mediaWatchdogTimer = setInterval(inspectWebMedia, 2000);
     $('call-status').textContent = initiator ? 'Ringing…' : 'Connecting…';
   } catch (error) {
     toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone permission to make calls.' : error.message);
@@ -1031,7 +1082,7 @@ function startConnectedTimer() {
 async function endCall(notify = true, reason = 'ended') {
   if (call.closed) return;
   const room = call.room;
-  call.closed = true; clearInterval(call.timer); clearInterval(call.heartbeatTimer); call.heartbeatTimer = null; clearTimeout(call.controlsTimer);
+  call.closed = true; clearInterval(call.timer); clearInterval(call.heartbeatTimer); call.heartbeatTimer = null; clearInterval(call.mediaWatchdogTimer); call.mediaWatchdogTimer = null; clearTimeout(call.controlsTimer);
   if (notify) await callSignal('leave', { reason }).catch(() => {});
   call.screenStream?.getTracks().forEach((track) => { track.onended = null; track.stop(); }); call.screenStream = null;
   call.stream?.getTracks().forEach((track) => track.stop());
