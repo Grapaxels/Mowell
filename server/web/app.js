@@ -25,12 +25,13 @@ const state = {
 const call = {
   room: '', conversation: null, video: false, stream: null, peers: new Map(),
   lastId: '', closed: true, pollTimer: null, startedAt: 0, timer: null,
-  iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80'] }],
+  iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80', 'stun:35.154.86.33:3478'] }],
   facingMode: 'user', screenStream: null, controlsTimer: null, heartbeatTimer: null, mediaWatchdogTimer: null, mediaWatchdogBusy: false, group: false
 };
 const fallbackIceServers = [
-  { urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80'] },
-  { urls: ['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp'], username: '9385ce067902b45d0c90d944', credential: 'TS2yMQueZBcqV0yg' }
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80', 'stun:35.154.86.33:3478'] },
+  { urls: ['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp'], username: '9385ce067902b45d0c90d944', credential: 'TS2yMQueZBcqV0yg' },
+  { urls: ['turn:35.154.86.33:3478?transport=udp', 'turn:35.154.86.33:3478?transport=tcp'], username: 'turnuser', credential: '@Grapaxels1338' }
 ];
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({
