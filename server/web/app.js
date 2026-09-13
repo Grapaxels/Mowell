@@ -30,7 +30,7 @@ const call = {
 };
 const fallbackIceServers = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80', 'stun:35.154.86.33:3478'] },
-  { urls: ['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp'], username: '9385ce067902b45d0c90d944', credential: 'TS2yMQueZBcqV0yg' },
+  { urls: ['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp', 'turn:global.relay.metered.ca:443', 'turns:global.relay.metered.ca:443?transport=tcp'], username: '9385ce067902b45d0c90d944', credential: 'TS2yMQueZBcqV0yg' },
   { urls: ['turn:35.154.86.33:3478?transport=udp', 'turn:35.154.86.33:3478?transport=tcp'], username: 'turnuser', credential: '@Grapaxels1338' }
 ];
 
@@ -690,8 +690,8 @@ async function loadIceConfiguration() {
 function hdVideoConstraints(facingMode, exact = false) {
   return {
     facingMode: exact ? { exact: facingMode } : { ideal: facingMode },
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
+    width: { ideal: 1920, max: 3840 },
+    height: { ideal: 1080, max: 2160 },
     aspectRatio: { ideal: 16 / 9 },
     frameRate: { ideal: 30, max: 30 }
   };
@@ -756,7 +756,7 @@ async function tuneSender(sender, kind, screen = false, recovery = false) {
     if (!parameters.encodings?.length) parameters.encodings = [{}];
     if (kind === 'video') {
       parameters.degradationPreference = screen ? 'maintain-resolution' : 'balanced';
-      parameters.encodings[0].maxBitrate = recovery ? 2400000 : (screen ? 8000000 : 6000000);
+      parameters.encodings[0].maxBitrate = recovery ? 2200000 : (screen ? 12000000 : 10000000);
       parameters.encodings[0].maxFramerate = 30;
       delete parameters.encodings[0].scaleResolutionDownBy;
     } else {
@@ -837,16 +837,14 @@ async function inspectWebMedia() {
       }
       const media = document.getElementById(`remote-${peer.id}`);
       if (media?.paused) media.play().catch(() => {});
-      if (Date.now() - peer.lastMediaAt > 4500 && Date.now() - peer.lastStallRequest > 6000) {
+      if (Date.now() - peer.lastMediaAt > 4200 && Date.now() - peer.lastStallRequest > 5500) {
         peer.lastStallRequest = Date.now();
         peer.stallCount += 1;
         if (media) { media.srcObject = null; media.srcObject = peer.remote; media.play().catch(() => setTimeout(() => media.play().catch(() => {}), 120)); }
-        const relay = peer.stallCount > 1 && forceWebRelay(peer);
+        const relay = forceWebRelay(peer);
         await callSignal('media', { requestVideo: true, forceRelay: relay }, peer.id).catch(() => {});
-        if (peer.stallCount > 1) {
-          if (state.me.id.localeCompare(peer.id) < 0) sendOffer(peer, true).catch(() => {});
-          else callSignal('join', { video: call.video, videoRecovery: true }, peer.id).catch(() => {});
-        }
+        if (state.me.id.localeCompare(peer.id) < 0) sendOffer(peer, true).catch(() => {});
+        else callSignal('join', { video: call.video, videoRecovery: true, forceRelay: relay }, peer.id).catch(() => {});
       }
     }
   } finally {
@@ -856,9 +854,9 @@ async function inspectWebMedia() {
 
 async function makePeer(id, name, shouldOffer) {
   if (call.peers.has(id)) return call.peers.get(id);
-  const pc = new RTCPeerConnection({ iceServers: call.iceServers, iceTransportPolicy: 'all', iceCandidatePoolSize: 2, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+  const pc = new RTCPeerConnection({ iceServers: call.iceServers, iceTransportPolicy: 'all', iceCandidatePoolSize: 4, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
   const remote = new MediaStream();
-  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null, makingOffer: false, needsOffer: false, needsIceRestart: false, relayForced: false, relayCandidate: false, inboundBytes: -1, inboundFrames: -1, lastMediaAt: Date.now(), lastStallRequest: 0, lastVideoRefresh: 0, stallCount: 0 };
+  const entry = { id, name, pc, remote, pending: [], restartAttempts: 0, restartTimer: null, connectTimer: null, makingOffer: false, needsOffer: false, needsIceRestart: false, relayForced: false, relayCandidate: false, inboundBytes: -1, inboundFrames: -1, lastMediaAt: Date.now(), lastStallRequest: 0, lastVideoRefresh: 0, stallCount: 0 };
   call.peers.set(id, entry);
   call.stream?.getTracks().forEach((track) => {
     const sender = pc.addTrack(track, call.stream);
@@ -896,6 +894,8 @@ async function makePeer(id, name, shouldOffer) {
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') {
       clearTimeout(entry.restartTimer);
+      clearTimeout(entry.connectTimer);
+      entry.connectTimer = null;
       entry.restartAttempts = 0;
       entry.lastMediaAt = Date.now();
       entry.stallCount = 0;
@@ -907,8 +907,18 @@ async function makePeer(id, name, shouldOffer) {
     if (pc.connectionState === 'disconnected') scheduleIceRecovery(entry, 1400);
     if (pc.connectionState === 'failed') scheduleIceRecovery(entry, 100);
   };
+  entry.connectTimer = setTimeout(() => escalateWebPeer(entry), 4000);
   if (shouldOffer) await sendOffer(entry);
   return entry;
+}
+
+async function escalateWebPeer(entry) {
+  if (call.closed || entry.pc.connectionState === 'connected') return;
+  forceWebRelay(entry);
+  $('call-status').textContent = 'Connecting through secure relay…';
+  if (state.me.id.localeCompare(entry.id) < 0) await sendOffer(entry, true).catch(() => {});
+  else await callSignal('join', { video: call.video, recovery: 'relay', forceRelay: true }, entry.id).catch(() => {});
+  scheduleIceRecovery(entry, 3500);
 }
 
 function scheduleIceRecovery(entry, delay) {
@@ -1018,7 +1028,7 @@ async function pollCall() {
   }
 }
 
-function removePeer(id) { const peer = call.peers.get(id); clearTimeout(peer?.restartTimer); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); updateRemoteVideoLayout(); }
+function removePeer(id) { const peer = call.peers.get(id); clearTimeout(peer?.restartTimer); clearTimeout(peer?.connectTimer); peer?.pc.close(); call.peers.delete(id); document.getElementById(`remote-${id}`)?.remove(); updateRemoteVideoLayout(); }
 function showIncoming(conversation, message, data) {
   if (!data?.room || (!call.closed && call.room === data.room)) return;
   state.incoming = { conversation, message, data };
@@ -1146,7 +1156,7 @@ async function endCall(notify = true, reason = 'ended') {
   if (notify) await callSignal('leave', { reason }).catch(() => {});
   call.screenStream?.getTracks().forEach((track) => { track.onended = null; track.stop(); }); call.screenStream = null;
   call.stream?.getTracks().forEach((track) => track.stop());
-  call.peers.forEach((peer) => { clearTimeout(peer.restartTimer); peer.pc.close(); }); call.peers.clear();
+  call.peers.forEach((peer) => { clearTimeout(peer.restartTimer); clearTimeout(peer.connectTimer); peer.pc.close(); }); call.peers.clear();
   $('remote-videos').querySelectorAll('[data-remote-media]').forEach((media) => media.remove());
   $('remote-videos').classList.remove('has-remote-video', 'single-remote-video');
   $('remote-videos').style.display = 'grid'; $('remote-videos').querySelector('.call-waiting')?.classList.remove('hidden');

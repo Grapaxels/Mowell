@@ -12,6 +12,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -158,24 +159,26 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val Canvas = Color(0xFFF7F7FB)
-private val Ink = Color(0xFF17151F)
-private val Violet = Color(0xFF6D55E7)
-private val VioletDark = Color(0xFF5740D3)
-private val Lavender = Color(0xFFEEEAFF)
-private val Lime = Color(0xFFD5FF4B)
-private val Peach = Color(0xFFFFE5D7)
-private val Muted = Color(0xFF74717E)
-private val ClayWhite = Color(0xFFFFFFFF)
-private val SoftSurface = Color(0xFFEFEFF5)
-private val Hairline = Color(0xFFE8E6ED)
+// Mowell's original monochrome system: near-black depth, white type and teal
+// interaction colour. Existing semantic names keep every screen consistent.
+private val Canvas = Color(0xFF050C0B)
+private val Ink = Color(0xFFF3FFFC)
+private val Violet = Color(0xFF1FC7B5)
+private val VioletDark = Color(0xFF0E9E91)
+private val Lavender = Color(0xFF12332E)
+private val Lime = Color(0xFF65E7D5)
+private val Peach = Color(0xFF173C36)
+private val Muted = Color(0xFF91AAA5)
+private val ClayWhite = Color(0xFF0A1715)
+private val SoftSurface = Color(0xFF102622)
+private val Hairline = Color(0xFF21443E)
 
 private enum class Page { CHATS, PEOPLE, CALLS, NEARBY, YOU }
 private enum class ChatFilter { ALL, UNREAD, GROUPS }
 
 @Composable
 fun MowellApp(vm: MowellViewModel) {
-    val scheme = androidx.compose.material3.lightColorScheme(
+    val scheme = androidx.compose.material3.darkColorScheme(
         primary = Violet,
         secondary = VioletDark,
         background = Canvas,
@@ -190,7 +193,14 @@ fun MowellApp(vm: MowellViewModel) {
     var splash by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { delay(1_500); splash = false }
 
-    MaterialTheme(colorScheme = scheme) {
+    MaterialTheme(
+        colorScheme = scheme,
+        shapes = androidx.compose.material3.Shapes(
+            small = RoundedCornerShape(16.dp),
+            medium = RoundedCornerShape(22.dp),
+            large = RoundedCornerShape(30.dp)
+        )
+    ) {
         Surface(Modifier.fillMaxSize(), color = Canvas) {
             when {
                 splash -> SplashScreen()
@@ -209,7 +219,7 @@ private fun SplashScreen() {
         fade.animateTo(1f, tween(280))
         reveal.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
     }
-    Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color.White, Lavender, Canvas))), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Lavender, ClayWhite, Canvas))), contentAlignment = Alignment.Center) {
         Column(Modifier.graphicsLayer { scaleX = reveal.value; scaleY = reveal.value; alpha = fade.value }, horizontalAlignment = Alignment.CenterHorizontally) {
             OrbLogo(104.dp)
             Spacer(Modifier.height(24.dp))
@@ -369,12 +379,14 @@ private fun MainExperience(vm: MowellViewModel) {
             },
             floatingActionButton = { if (page == Page.CHATS) FloatingActionButton(onClick = { page = Page.PEOPLE }, containerColor = Violet, contentColor = Color.White, shape = CircleShape) { Icon(Icons.Rounded.Add, "Find people") } }
         ) { padding ->
-            when (page) {
-                Page.CHATS -> ChatsScreen(vm, Modifier.padding(padding)) { openChat = it }
-                Page.PEOPLE -> PeopleScreen(vm, Modifier.padding(padding)) { user -> vm.startChat(user) { conversationId -> openChat = conversationId } }
-                Page.CALLS -> CallsScreen(vm, Modifier.padding(padding)) { vm.launchCall(context, it) }
-                Page.NEARBY -> NearbyScreen(vm, Modifier.padding(padding))
-                Page.YOU -> SettingsScreen(vm, Modifier.padding(padding))
+            Crossfade(targetState = page, animationSpec = tween(280), label = "Mowell liquid navigation") { destination ->
+                when (destination) {
+                    Page.CHATS -> ChatsScreen(vm, Modifier.padding(padding)) { openChat = it }
+                    Page.PEOPLE -> PeopleScreen(vm, Modifier.padding(padding)) { user -> vm.startChat(user) { conversationId -> openChat = conversationId } }
+                    Page.CALLS -> CallsScreen(vm, Modifier.padding(padding)) { vm.launchCall(context, it) }
+                    Page.NEARBY -> NearbyScreen(vm, Modifier.padding(padding))
+                    Page.YOU -> SettingsScreen(vm, Modifier.padding(padding))
+                }
             }
         }
     }
@@ -432,8 +444,8 @@ private fun ClayHeader(vm: MowellViewModel, onChats: () -> Unit, onProfile: () -
     Row(Modifier.fillMaxWidth().shadow(1.dp).background(ClayWhite).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         OrbLogo(40.dp); Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) { Text("Mowell", fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = (-0.6).sp); Text("from Grapaxels", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
-        Row(Modifier.clip(RoundedCornerShape(50)).background(if (vm.networkLabel().startsWith("Internet")) Color(0xFFE8F8EF) else Lavender).padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (vm.networkLabel().startsWith("Internet")) Icons.Rounded.Wifi else Icons.Rounded.Bluetooth, null, tint = if (vm.networkLabel().startsWith("Internet")) Color(0xFF24975A) else Violet, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(if (vm.networkLabel().startsWith("Internet")) "Online" else "Nearby", color = if (vm.networkLabel().startsWith("Internet")) Color(0xFF247C4D) else VioletDark, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.clip(RoundedCornerShape(50)).background(Lavender).padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (vm.networkLabel().startsWith("Internet")) Icons.Rounded.Wifi else Icons.Rounded.Bluetooth, null, tint = Violet, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(if (vm.networkLabel().startsWith("Internet")) "Online" else "Nearby", color = Lime, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More options", tint = Ink) }
@@ -1028,7 +1040,7 @@ private fun MessageClay(message: MessageEntity, callEnded: Boolean, onReply: () 
                 }
                 Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                     Text(time(message.sentAt), color = if (message.outgoing) Color.White.copy(alpha = .7f) else Muted, fontSize = 9.sp)
-                    if (message.outgoing) { Spacer(Modifier.width(5.dp)); Text(deliveryTicks(message.delivery), color = if (message.delivery.equals("seen", true) || message.delivery.equals("read", true)) Color(0xFF66D7FF) else Color.White.copy(alpha = .76f), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                    if (message.outgoing) { Spacer(Modifier.width(5.dp)); Text(deliveryTicks(message.delivery), color = if (message.delivery.equals("seen", true) || message.delivery.equals("read", true)) Lime else Color.White.copy(alpha = .76f), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                 }
             }
         }
@@ -1109,7 +1121,7 @@ private fun TypingBubble(names: String) {
     var phase by remember(names) { mutableStateOf(0) }
     LaunchedEffect(names) { while (true) { delay(180); phase = (phase + 1) % 3 } }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        Column(Modifier.shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(ClayWhite).border(1.dp, Color.White, RoundedCornerShape(18.dp)).padding(horizontal = 15.dp, vertical = 10.dp)) {
+        Column(Modifier.shadow(5.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(ClayWhite).border(1.dp, Hairline, RoundedCornerShape(18.dp)).padding(horizontal = 15.dp, vertical = 10.dp)) {
             Text("$names typing", color = Muted, fontSize = 10.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
                 repeat(3) { index ->

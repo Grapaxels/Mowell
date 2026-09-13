@@ -81,7 +81,7 @@ class MowellCallActivity : ComponentActivity() {
         audio.isSpeakerphoneOn = intent.getBooleanExtra("video", false)
 
         webView = WebView(this).apply {
-            setBackgroundColor(android.graphics.Color.rgb(17, 17, 24))
+            setBackgroundColor(android.graphics.Color.rgb(5, 12, 11))
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = false
             settings.allowFileAccess = false
